@@ -1,0 +1,704 @@
+"use client";
+
+import { useEffect, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { Pencil, Plus, Trash2 } from "lucide-react";
+import { toast } from "sonner";
+
+import {
+  createCourts,
+  deleteCourt,
+  deleteCourts,
+  getLatestCourtRate,
+  updateCourt,
+} from "./actions";
+import {
+  courtFormSchema,
+  createCourtsSchema,
+  highestCourtNumber,
+  type Court,
+  type CourtFormValues,
+  type CreateCourtsValues,
+} from "./schema";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+
+const PHP = new Intl.NumberFormat("en-PH", {
+  style: "currency",
+  currency: "PHP",
+  maximumFractionDigits: 2,
+});
+
+const PAGE_SIZE = 10;
+
+// Produce a compact page number list with ellipses: 1, …, 4, 5, 6, …, 10.
+// Always includes first + last + a window around the current page.
+function pageNumbers(current: number, total: number): Array<number | "ellipsis"> {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const out: Array<number | "ellipsis"> = [1];
+  const windowStart = Math.max(2, current - 1);
+  const windowEnd = Math.min(total - 1, current + 1);
+  if (windowStart > 2) out.push("ellipsis");
+  for (let p = windowStart; p <= windowEnd; p++) out.push(p);
+  if (windowEnd < total - 1) out.push("ellipsis");
+  out.push(total);
+  return out;
+}
+
+export function CourtsTable({ courts }: { courts: Court[] }) {
+  const router = useRouter();
+  const [addOpen, setAddOpen] = useState(false);
+  const [editing, setEditing] = useState<Court | null>(null);
+  const [deleting, setDeleting] = useState<Court | null>(null);
+  const [deletePending, startDeleteTransition] = useTransition();
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
+  const [bulkPending, startBulkTransition] = useTransition();
+  const [page, setPage] = useState(1);
+
+  const existingIds = new Set(courts.map((c) => c.id));
+  const selectedIds = Array.from(selected).filter((id) => existingIds.has(id));
+  const selectedCount = selectedIds.length;
+
+  const totalPages = Math.max(1, Math.ceil(courts.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const pageStart = (safePage - 1) * PAGE_SIZE;
+  const pageCourts = courts.slice(pageStart, pageStart + PAGE_SIZE);
+
+  useEffect(() => {
+    if (page !== safePage) setPage(safePage);
+  }, [page, safePage]);
+
+  // Header checkbox reflects only the visible page.
+  const pageIds = pageCourts.map((c) => c.id);
+  const selectedOnPage = pageIds.filter((id) => selected.has(id)).length;
+  const allPageSelected = pageIds.length > 0 && selectedOnPage === pageIds.length;
+  const headerState: boolean | "indeterminate" =
+    selectedOnPage === 0 ? false : allPageSelected ? true : "indeterminate";
+
+  function toggleRow(id: string, checked: boolean) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
+  function toggleAllOnPage() {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allPageSelected || selectedOnPage > 0) {
+        for (const id of pageIds) next.delete(id);
+      } else {
+        for (const id of pageIds) next.add(id);
+      }
+      return next;
+    });
+  }
+
+  function onDeleteConfirm() {
+    if (!deleting) return;
+    const target = deleting;
+    startDeleteTransition(async () => {
+      const result = await deleteCourt(target.id, target.name);
+      if (result.success) {
+        toast.success("Court deleted");
+        setDeleting(null);
+        router.refresh();
+      } else {
+        toast.error(result.error ?? "Failed to delete court.");
+      }
+    });
+  }
+
+  function onBulkDeleteConfirm() {
+    if (selectedIds.length === 0) return;
+    const targets = selectedIds;
+    startBulkTransition(async () => {
+      const result = await deleteCourts(targets);
+      const { deletedCount, failedNames } = result;
+
+      if (deletedCount > 0 && failedNames.length === 0) {
+        toast.success(
+          deletedCount === 1
+            ? "Court deleted"
+            : `${deletedCount} courts deleted`,
+        );
+      } else if (deletedCount > 0 && failedNames.length > 0) {
+        toast.warning(
+          `Deleted ${deletedCount}. Couldn't delete ${failedNames.join(", ")} — existing bookings.`,
+        );
+      } else {
+        toast.error(
+          `Couldn't delete ${failedNames.join(", ")} — they have existing bookings. Toggle inactive instead.`,
+        );
+      }
+
+      setSelected(new Set());
+      setBulkConfirmOpen(false);
+      router.refresh();
+    });
+  }
+
+  return (
+    <>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+            Courts
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Manage court names, rates, and availability.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {selectedCount > 0 ? (
+            <Button
+              variant="destructive"
+              onClick={() => setBulkConfirmOpen(true)}
+            >
+              <Trash2 className="h-4 w-4" aria-hidden />
+              Delete {selectedCount}
+            </Button>
+          ) : null}
+          <Button onClick={() => setAddOpen(true)}>
+            <Plus className="h-4 w-4" aria-hidden />
+            Add Court
+          </Button>
+        </div>
+      </div>
+
+      {courts.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-border px-6 py-12 text-center">
+          <p className="text-sm text-muted-foreground">
+            No courts yet. Add your first court to get started.
+          </p>
+        </div>
+      ) : (
+        <div className="rounded-lg border border-border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-[1%]">
+                  <Checkbox
+                    checked={headerState}
+                    onCheckedChange={toggleAllOnPage}
+                    aria-label="Select courts on this page"
+                  />
+                </TableHead>
+                <TableHead>Name</TableHead>
+                <TableHead>Hourly Rate</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="w-[1%] text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {pageCourts.map((court) => {
+                const isSelected = selected.has(court.id);
+                return (
+                <TableRow key={court.id} data-state={isSelected ? "selected" : undefined}>
+                  <TableCell>
+                    <Checkbox
+                      checked={isSelected}
+                      onCheckedChange={(c) => toggleRow(court.id, c === true)}
+                      aria-label={`Select ${court.name}`}
+                    />
+                  </TableCell>
+                  <TableCell className="font-medium">{court.name}</TableCell>
+                  <TableCell>{PHP.format(court.hourly_rate)}</TableCell>
+                  <TableCell>
+                    <Badge variant={court.is_active ? "default" : "secondary"}>
+                      {court.is_active ? "Active" : "Inactive"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-1">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setEditing(court)}
+                        aria-label={`Edit ${court.name}`}
+                      >
+                        <Pencil className="h-4 w-4" aria-hidden />
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setDeleting(court)}
+                        aria-label={`Delete ${court.name}`}
+                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      >
+                        <Trash2 className="h-4 w-4" aria-hidden />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+
+      {courts.length > 0 ? (
+        <div className="flex items-center justify-between gap-4 text-sm text-muted-foreground">
+          <div>
+            Showing {pageStart + 1}–{pageStart + pageCourts.length} of {courts.length}
+          </div>
+          {totalPages > 1 ? (
+            <Pagination className="mx-0 w-auto justify-end">
+              <PaginationContent>
+                <PaginationItem>
+                  <PaginationPrevious
+                    href="#"
+                    aria-disabled={safePage === 1}
+                    className={
+                      safePage === 1 ? "pointer-events-none opacity-50" : ""
+                    }
+                    onClick={(e) => {
+                      e.preventDefault();
+                      if (safePage > 1) setPage(safePage - 1);
+                    }}
+                  />
+                </PaginationItem>
+                {pageNumbers(safePage, totalPages).map((p, i) =>
+                  p === "ellipsis" ? (
+                    <PaginationItem key={`ellipsis-${i}`}>
+                      <PaginationEllipsis />
+                    </PaginationItem>
+                  ) : (
+                    <PaginationItem key={p}>
+                      <PaginationLink
+                        href="#"
+                        isActive={p === safePage}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setPage(p);
+                        }}
+                      >
+                        {p}
+                      </PaginationLink>
+                    </PaginationItem>
+                  ),
+                )}
+                <PaginationItem>
+                  <PaginationNext
+                    href="#"
+                    aria-disabled={safePage === totalPages}
+                    className={
+                      safePage === totalPages
+                        ? "pointer-events-none opacity-50"
+                        : ""
+                    }
+                    onClick={(e) => {
+                      e.preventDefault();
+                      if (safePage < totalPages) setPage(safePage + 1);
+                    }}
+                  />
+                </PaginationItem>
+              </PaginationContent>
+            </Pagination>
+          ) : null}
+        </div>
+      ) : null}
+
+      {addOpen ? (
+        <AddCourtsDialog
+          courts={courts}
+          onClose={() => setAddOpen(false)}
+          onSaved={() => router.refresh()}
+        />
+      ) : null}
+
+      {editing ? (
+        <EditCourtDialog
+          court={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => router.refresh()}
+        />
+      ) : null}
+
+      <Dialog open={!!deleting} onOpenChange={(o) => !o && setDeleting(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete court</DialogTitle>
+            <DialogDescription>
+              Delete {deleting?.name}? This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setDeleting(null)}
+              disabled={deletePending}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={onDeleteConfirm}
+              disabled={deletePending}
+            >
+              {deletePending ? "Deleting…" : "Delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={bulkConfirmOpen}
+        onOpenChange={(o) => !o && !bulkPending && setBulkConfirmOpen(false)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              Delete {selectedCount} {selectedCount === 1 ? "court" : "courts"}?
+            </DialogTitle>
+            <DialogDescription>
+              This cannot be undone. Courts with existing bookings will be
+              skipped — toggle those inactive instead.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setBulkConfirmOpen(false)}
+              disabled={bulkPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={onBulkDeleteConfirm}
+              disabled={bulkPending}
+            >
+              {bulkPending
+                ? "Deleting…"
+                : `Delete ${selectedCount} ${selectedCount === 1 ? "court" : "courts"}`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function AddCourtsDialog({
+  courts,
+  onClose,
+  onSaved,
+}: {
+  courts: Court[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [pending, startTransition] = useTransition();
+
+  const startNumber = highestCourtNumber(courts.map((c) => c.name)) + 1;
+
+  const form = useForm<CreateCourtsValues>({
+    resolver: zodResolver(createCourtsSchema),
+    defaultValues: { quantity: 1, hourly_rate: 0 },
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    getLatestCourtRate().then((rate) => {
+      if (!cancelled) form.setValue("hourly_rate", rate);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const quantity = form.watch("quantity");
+  const previewCount = Math.max(1, Math.min(quantity || 1, 20));
+  const previewNames = Array.from(
+    { length: previewCount },
+    (_, i) => `Court ${startNumber + i}`,
+  );
+  const previewText =
+    previewNames.length <= 4
+      ? previewNames.join(", ")
+      : `${previewNames.slice(0, 3).join(", ")}, … ${
+          previewNames[previewNames.length - 1]
+        }`;
+
+  function onSubmit(values: CreateCourtsValues) {
+    startTransition(async () => {
+      const result = await createCourts(values);
+      if (result.success) {
+        toast.success(
+          values.quantity === 1
+            ? "Court added"
+            : `${values.quantity} courts added`,
+        );
+        onSaved();
+        onClose();
+      } else {
+        toast.error(result.error ?? "Failed to add courts.");
+      }
+    });
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Add courts</DialogTitle>
+          <DialogDescription>
+            Courts are numbered automatically. Rename from the edit dialog if
+            you need to.
+          </DialogDescription>
+        </DialogHeader>
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(onSubmit)} className="grid gap-4">
+            <div className="grid grid-cols-2 gap-3">
+              <FormField
+                control={form.control}
+                name="quantity"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Quantity</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="number"
+                        inputMode="numeric"
+                        min={1}
+                        max={20}
+                        step={1}
+                        autoFocus
+                        {...field}
+                        onChange={(e) =>
+                          field.onChange(
+                            e.target.value === ""
+                              ? 1
+                              : e.target.valueAsNumber,
+                          )
+                        }
+                        value={Number.isFinite(field.value) ? field.value : ""}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="hourly_rate"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Hourly rate (PHP)</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="number"
+                        inputMode="decimal"
+                        min={0}
+                        step="0.01"
+                        {...field}
+                        onChange={(e) =>
+                          field.onChange(
+                            e.target.value === ""
+                              ? 0
+                              : e.target.valueAsNumber,
+                          )
+                        }
+                        value={Number.isFinite(field.value) ? field.value : ""}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+            <div className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+              Adds: <span className="font-medium text-foreground">{previewText}</span>
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={onClose}
+                disabled={pending}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={pending}>
+                {pending
+                  ? "Adding…"
+                  : quantity > 1
+                  ? `Add ${quantity} courts`
+                  : "Add court"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </Form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditCourtDialog({
+  court,
+  onClose,
+  onSaved,
+}: {
+  court: Court;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [pending, startTransition] = useTransition();
+
+  const form = useForm<CourtFormValues>({
+    resolver: zodResolver(courtFormSchema),
+    defaultValues: {
+      name: court.name,
+      hourly_rate: court.hourly_rate,
+      is_active: court.is_active,
+    },
+  });
+
+  function onSubmit(values: CourtFormValues) {
+    startTransition(async () => {
+      const result = await updateCourt(court.id, values);
+      if (result.success) {
+        toast.success("Court updated");
+        onSaved();
+        onClose();
+      } else {
+        toast.error(result.error ?? "Failed to update court.");
+      }
+    });
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Edit {court.name}</DialogTitle>
+          <DialogDescription>
+            Update this court&apos;s name, rate, or active state.
+          </DialogDescription>
+        </DialogHeader>
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(onSubmit)} className="grid gap-4">
+            <FormField
+              control={form.control}
+              name="name"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Name</FormLabel>
+                  <FormControl>
+                    <Input {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="hourly_rate"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Hourly rate (PHP)</FormLabel>
+                  <FormControl>
+                    <Input
+                      type="number"
+                      inputMode="decimal"
+                      min={0}
+                      step="0.01"
+                      {...field}
+                      onChange={(e) =>
+                        field.onChange(
+                          e.target.value === ""
+                            ? 0
+                            : e.target.valueAsNumber,
+                        )
+                      }
+                      value={Number.isFinite(field.value) ? field.value : ""}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="is_active"
+              render={({ field }) => (
+                <FormItem className="flex items-center justify-between rounded-md border border-border px-3 py-2">
+                  <div className="space-y-0.5">
+                    <FormLabel className="text-sm">Active</FormLabel>
+                    <FormDescription>
+                      Inactive courts are hidden from customers.
+                    </FormDescription>
+                  </div>
+                  <FormControl>
+                    <Switch
+                      checked={field.value ?? true}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                </FormItem>
+              )}
+            />
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={onClose}
+                disabled={pending}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={pending}>
+                {pending ? "Saving…" : "Save changes"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </Form>
+      </DialogContent>
+    </Dialog>
+  );
+}
