@@ -45,6 +45,15 @@ import {
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
+import {
   Table,
   TableBody,
   TableCell,
@@ -59,6 +68,22 @@ const PHP = new Intl.NumberFormat("en-PH", {
   maximumFractionDigits: 2,
 });
 
+const PAGE_SIZE = 10;
+
+// Produce a compact page number list with ellipses: 1, …, 4, 5, 6, …, 10.
+// Always includes first + last + a window around the current page.
+function pageNumbers(current: number, total: number): Array<number | "ellipsis"> {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const out: Array<number | "ellipsis"> = [1];
+  const windowStart = Math.max(2, current - 1);
+  const windowEnd = Math.min(total - 1, current + 1);
+  if (windowStart > 2) out.push("ellipsis");
+  for (let p = windowStart; p <= windowEnd; p++) out.push(p);
+  if (windowEnd < total - 1) out.push("ellipsis");
+  out.push(total);
+  return out;
+}
+
 export function CourtsTable({ courts }: { courts: Court[] }) {
   const router = useRouter();
   const [addOpen, setAddOpen] = useState(false);
@@ -68,13 +93,27 @@ export function CourtsTable({ courts }: { courts: Court[] }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
   const [bulkPending, startBulkTransition] = useTransition();
+  const [page, setPage] = useState(1);
 
   const existingIds = new Set(courts.map((c) => c.id));
   const selectedIds = Array.from(selected).filter((id) => existingIds.has(id));
   const selectedCount = selectedIds.length;
-  const allSelected = courts.length > 0 && selectedCount === courts.length;
+
+  const totalPages = Math.max(1, Math.ceil(courts.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const pageStart = (safePage - 1) * PAGE_SIZE;
+  const pageCourts = courts.slice(pageStart, pageStart + PAGE_SIZE);
+
+  useEffect(() => {
+    if (page !== safePage) setPage(safePage);
+  }, [page, safePage]);
+
+  // Header checkbox reflects only the visible page.
+  const pageIds = pageCourts.map((c) => c.id);
+  const selectedOnPage = pageIds.filter((id) => selected.has(id)).length;
+  const allPageSelected = pageIds.length > 0 && selectedOnPage === pageIds.length;
   const headerState: boolean | "indeterminate" =
-    selectedCount === 0 ? false : allSelected ? true : "indeterminate";
+    selectedOnPage === 0 ? false : allPageSelected ? true : "indeterminate";
 
   function toggleRow(id: string, checked: boolean) {
     setSelected((prev) => {
@@ -85,12 +124,16 @@ export function CourtsTable({ courts }: { courts: Court[] }) {
     });
   }
 
-  function toggleAll() {
-    if (allSelected || selectedCount > 0) {
-      setSelected(new Set());
-    } else {
-      setSelected(new Set(courts.map((c) => c.id)));
-    }
+  function toggleAllOnPage() {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allPageSelected || selectedOnPage > 0) {
+        for (const id of pageIds) next.delete(id);
+      } else {
+        for (const id of pageIds) next.add(id);
+      }
+      return next;
+    });
   }
 
   function onDeleteConfirm() {
@@ -179,8 +222,8 @@ export function CourtsTable({ courts }: { courts: Court[] }) {
                 <TableHead className="w-[1%]">
                   <Checkbox
                     checked={headerState}
-                    onCheckedChange={toggleAll}
-                    aria-label="Select all courts"
+                    onCheckedChange={toggleAllOnPage}
+                    aria-label="Select courts on this page"
                   />
                 </TableHead>
                 <TableHead>Name</TableHead>
@@ -190,7 +233,7 @@ export function CourtsTable({ courts }: { courts: Court[] }) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {courts.map((court) => {
+              {pageCourts.map((court) => {
                 const isSelected = selected.has(court.id);
                 return (
                 <TableRow key={court.id} data-state={isSelected ? "selected" : undefined}>
@@ -236,6 +279,68 @@ export function CourtsTable({ courts }: { courts: Court[] }) {
           </Table>
         </div>
       )}
+
+      {courts.length > 0 ? (
+        <div className="flex items-center justify-between gap-4 text-sm text-muted-foreground">
+          <div>
+            Showing {pageStart + 1}–{pageStart + pageCourts.length} of {courts.length}
+          </div>
+          {totalPages > 1 ? (
+            <Pagination className="mx-0 w-auto justify-end">
+              <PaginationContent>
+                <PaginationItem>
+                  <PaginationPrevious
+                    href="#"
+                    aria-disabled={safePage === 1}
+                    className={
+                      safePage === 1 ? "pointer-events-none opacity-50" : ""
+                    }
+                    onClick={(e) => {
+                      e.preventDefault();
+                      if (safePage > 1) setPage(safePage - 1);
+                    }}
+                  />
+                </PaginationItem>
+                {pageNumbers(safePage, totalPages).map((p, i) =>
+                  p === "ellipsis" ? (
+                    <PaginationItem key={`ellipsis-${i}`}>
+                      <PaginationEllipsis />
+                    </PaginationItem>
+                  ) : (
+                    <PaginationItem key={p}>
+                      <PaginationLink
+                        href="#"
+                        isActive={p === safePage}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setPage(p);
+                        }}
+                      >
+                        {p}
+                      </PaginationLink>
+                    </PaginationItem>
+                  ),
+                )}
+                <PaginationItem>
+                  <PaginationNext
+                    href="#"
+                    aria-disabled={safePage === totalPages}
+                    className={
+                      safePage === totalPages
+                        ? "pointer-events-none opacity-50"
+                        : ""
+                    }
+                    onClick={(e) => {
+                      e.preventDefault();
+                      if (safePage < totalPages) setPage(safePage + 1);
+                    }}
+                  />
+                </PaginationItem>
+              </PaginationContent>
+            </Pagination>
+          ) : null}
+        </div>
+      ) : null}
 
       {addOpen ? (
         <AddCourtsDialog
