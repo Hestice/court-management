@@ -6,7 +6,9 @@ import { createClient } from "@/lib/supabase/server";
 import {
   courtFormSchema,
   createCourtsSchema,
-  GRID_ROW_WIDTH,
+  COURTS_PER_ROW,
+  COURT_STRIDE_X,
+  COURT_STRIDE_Y,
   highestCourtNumber,
   type CourtFormValues,
   type CreateCourtsValues,
@@ -26,18 +28,25 @@ function takenPositionSet(rows: PositionRow[]): Set<string> {
   return taken;
 }
 
+// Walk the slot grid (COURTS_PER_ROW wide) and pick the first `count` slots
+// whose top-left isn't already occupied. Each slot index N maps to
+// (col * STRIDE_X, row * STRIDE_Y) so placed courts get a 1-cell gap on each
+// side. Scanning by slot index (not by raw cell) also means deletes leave gaps
+// that future auto-placements fill in order.
 function nextFreePositions(
   taken: Set<string>,
   count: number,
 ): Array<{ x: number; y: number }> {
   const picks: Array<{ x: number; y: number }> = [];
-  for (let y = 0; picks.length < count; y++) {
-    for (let x = 0; x < GRID_ROW_WIDTH && picks.length < count; x++) {
-      const key = `${x},${y}`;
-      if (!taken.has(key)) {
-        picks.push({ x, y });
-        taken.add(key);
-      }
+  for (let n = 0; picks.length < count; n++) {
+    const col = n % COURTS_PER_ROW;
+    const row = Math.floor(n / COURTS_PER_ROW);
+    const x = col * COURT_STRIDE_X;
+    const y = row * COURT_STRIDE_Y;
+    const key = `${x},${y}`;
+    if (!taken.has(key)) {
+      picks.push({ x, y });
+      taken.add(key);
     }
   }
   return picks;
