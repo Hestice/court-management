@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -11,6 +11,7 @@ import {
   createCourts,
   deleteCourt,
   deleteCourts,
+  getLatestCourtRate,
   updateCourt,
 } from "./actions";
 import {
@@ -57,14 +58,6 @@ const PHP = new Intl.NumberFormat("en-PH", {
   currency: "PHP",
   maximumFractionDigits: 2,
 });
-
-function latestRate(courts: Court[]): number {
-  if (courts.length === 0) return 0;
-  const latest = courts.reduce((a, b) =>
-    a.created_at > b.created_at ? a : b,
-  );
-  return latest.hourly_rate;
-}
 
 export function CourtsTable({ courts }: { courts: Court[] }) {
   const router = useRouter();
@@ -337,12 +330,22 @@ function AddCourtsDialog({
   const [pending, startTransition] = useTransition();
 
   const startNumber = highestCourtNumber(courts.map((c) => c.name)) + 1;
-  const defaultRate = latestRate(courts);
 
   const form = useForm<CreateCourtsValues>({
     resolver: zodResolver(createCourtsSchema),
-    defaultValues: { quantity: 1, hourly_rate: defaultRate },
+    defaultValues: { quantity: 1, hourly_rate: 0 },
   });
+
+  useEffect(() => {
+    let cancelled = false;
+    getLatestCourtRate().then((rate) => {
+      if (!cancelled) form.setValue("hourly_rate", rate);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const quantity = form.watch("quantity");
   const previewCount = Math.max(1, Math.min(quantity || 1, 20));

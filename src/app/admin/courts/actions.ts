@@ -43,6 +43,17 @@ function nextFreePositions(
   return picks;
 }
 
+export async function getLatestCourtRate(): Promise<number> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("courts")
+    .select("hourly_rate")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return data?.hourly_rate ?? 0;
+}
+
 export async function createCourts(
   values: CreateCourtsValues,
 ): Promise<ActionResult> {
