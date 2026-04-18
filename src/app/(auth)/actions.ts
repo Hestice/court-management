@@ -42,28 +42,30 @@ export async function register(_prev: AuthResult, formData: FormData): Promise<A
   const name = String(formData.get("name") ?? "").trim();
   const email = String(formData.get("email") ?? "").trim();
   const password = String(formData.get("password") ?? "");
+  const origin = String(formData.get("origin") ?? "");
 
   if (name.length < 2) {
     return { error: "Name must be at least 2 characters." };
   }
 
   const supabase = await createClient();
-  const { error } = await supabase.auth.signUp({
+  const { data, error } = await supabase.auth.signUp({
     email,
     password,
-    options: { data: { name } },
+    options: {
+      data: { name },
+      emailRedirectTo: origin ? `${origin}/auth/callback` : undefined,
+    },
   });
 
   if (error) {
     return { error: error.message };
   }
 
-  const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-  if (signInError) {
-    return { error: "Account created. Please sign in." };
-  }
-
   revalidatePath("/", "layout");
+  if (!data.session) {
+    redirect(`/verify-email?email=${encodeURIComponent(email)}`);
+  }
   redirect("/");
 }
 

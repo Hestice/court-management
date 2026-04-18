@@ -29,6 +29,24 @@ To learn more about Next.js, take a look at the following resources:
 
 You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
 
+## Supabase Configuration
+
+### Email confirmation
+
+The app works with Supabase email confirmation either ON or OFF — toggle it in **Supabase → Authentication → Providers → Email → "Confirm email"** without any code changes.
+
+- **OFF** — `signUp` returns a session immediately; registration redirects straight to `/`. Recommended for local and preview dev because Supabase's free tier caps confirmation emails at 2/hour.
+- **ON** — `signUp` returns no session; registration redirects to `/verify-email`. The confirmation link hits `/auth/callback`, which exchanges the code for a session and redirects to `/`. On exchange failure, the user lands on `/login?error=auth_callback_failed`.
+
+When confirmation is ON, make sure **Site URL** and **Redirect URLs** (under Authentication → URL Configuration) include every origin you care about — local dev, preview deploys, and production — so the confirmation links resolve back to your app.
+
+### Env vars
+
+Copy `.env.local.example` to `.env.local` and fill in:
+
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+
 ## Deploy on Vercel
 
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.

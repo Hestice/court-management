@@ -40,6 +40,7 @@ export function RegisterForm() {
     fd.set("name", values.name);
     fd.set("email", values.email);
     fd.set("password", values.password);
+    fd.set("origin", window.location.origin);
 
     startTransition(async () => {
       const result = await register(undefined, fd);
