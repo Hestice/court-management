@@ -33,7 +33,13 @@ export type Court = {
   created_at: string;
 };
 
-export const GRID_ROW_WIDTH = 10;
+// Floor-plan layout constants. Courts occupy a 2×4 grid footprint; auto-placement
+// steps in 3×5 so every court is visually separated by one walkway cell.
+export const COURT_CELLS_W = 2;
+export const COURT_CELLS_H = 4;
+export const COURT_STRIDE_X = 3;
+export const COURT_STRIDE_Y = 5;
+export const COURTS_PER_ROW = 10;
 
 const COURT_NAME_PATTERN = /^Court\s+(\d+)$/i;
 

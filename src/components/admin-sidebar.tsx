@@ -10,6 +10,7 @@ import {
   Inbox,
   LayoutGrid,
   LogOut,
+  Map,
   QrCode,
   ScanLine,
   ShieldBan,
@@ -18,6 +19,7 @@ import {
 } from "lucide-react";
 
 import { logout } from "@/app/(auth)/actions";
+import { useNavGuardCheck } from "@/components/admin-nav-guard";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -34,6 +36,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/admin/scan", label: "QR Scanner", icon: ScanLine },
   { href: "/admin/users", label: "Users", icon: Users },
   { href: "/admin/courts", label: "Courts", icon: LayoutGrid },
+  { href: "/admin/floor-plan", label: "Floor Plan", icon: Map },
   { href: "/admin/blocked-slots", label: "Blocked Slots", icon: ShieldBan },
   { href: "/admin/payment-settings", label: "Payment Settings", icon: CreditCard },
   { href: "/admin/inquiries", label: "Inquiries", icon: Inbox },
@@ -42,12 +45,22 @@ const NAV_ITEMS: NavItem[] = [
 
 export function AdminSidebar() {
   const pathname = usePathname();
+  const checkGuard = useNavGuardCheck();
+
+  const onNavClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+    if (!checkGuard()) e.preventDefault();
+  };
 
   return (
     <aside className="flex shrink-0 flex-col border-b border-border bg-card md:sticky md:top-0 md:h-screen md:w-64 md:border-r md:border-b-0">
       <div className="flex items-center gap-2 px-4 py-4 md:px-6">
         <QrCode className="h-5 w-5 text-primary" aria-hidden />
-        <Link href="/admin" className="font-semibold tracking-tight">
+        <Link
+          href="/admin"
+          onClick={onNavClick}
+          className="font-semibold tracking-tight"
+        >
           Admin Panel
         </Link>
       </div>
@@ -64,6 +77,7 @@ export function AdminSidebar() {
               <li key={item.href}>
                 <Link
                   href={item.href}
+                  onClick={onNavClick}
                   aria-current={active ? "page" : undefined}
                   className={cn(
                     "flex items-center gap-2 whitespace-nowrap rounded-md px-3 py-2 text-sm transition-colors",
