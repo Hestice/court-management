@@ -47,6 +47,27 @@ Copy `.env.local.example` to `.env.local` and fill in:
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 
+### Generating database types
+
+Database types live at `src/lib/supabase/database.types.ts` and are regenerated from the live Supabase schema whenever you run new migrations. The CLI is installed as a dev dependency.
+
+```bash
+SUPABASE_PROJECT_ID=<your-project-ref> npm run gen:types
+```
+
+Replace `<your-project-ref>` with your Supabase project reference (the subdomain piece of your project URL — e.g. `abcdefghijklmnop` in `https://abcdefghijklmnop.supabase.co`). You can also find it under **Project Settings → General**. First-time use requires `npx supabase login`.
+
+### Running migrations
+
+Migrations live under `supabase/migrations/`. Apply them either via the Supabase Dashboard SQL Editor (paste each file in order) or via the CLI:
+
+```bash
+npx supabase link --project-ref <your-project-ref>
+npx supabase db push
+```
+
+After migrations run, regenerate types with `npm run gen:types`.
+
 ## Deploy on Vercel
 
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
