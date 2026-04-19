@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/actions";
 import { logAuditEvent } from "@/lib/audit";
 import { getBookingForOwnership } from "@/lib/data/bookings";
+import { getPassForOwnership } from "@/lib/data/entrance-passes";
 import {
   convertToWebp,
   RECEIPT_CONVERT_DEFAULTS,
@@ -31,8 +32,13 @@ export async function getReceiptSignedUrl(
   return createReceiptSignedUrl(path);
 }
 
+// Upload a receipt for either a booking or an entrance pass. Path prefix
+// differs between the two so admin-side queries don't need to guess — bookings
+// land at {user_id}/{booking_id}/receipt.webp and passes at
+// {user_id}/pass-{pass_id}/receipt.webp.
 export async function uploadReceipt(
-  bookingId: string,
+  kind: "booking" | "pass",
+  entityId: string,
   formData: FormData,
 ): Promise<UploadReceiptResult> {
   const auth = await requireUser();
@@ -47,19 +53,32 @@ export async function uploadReceipt(
     };
   }
 
-  // Load the booking and check ownership. Admins can view any payment page
-  // but are not intended to upload on behalf of customers — enforcing "owner
-  // only" for uploads keeps the audit trail clean (the receipt always came
-  // from the customer's own session).
-  const booking = await getBookingForOwnership(bookingId);
-  if (!booking) return { success: false, error: "Booking not found." };
-  if (booking.user_id !== userId) {
-    return { success: false, error: "You can only upload for your own booking." };
-  }
-  if (booking.status !== "pending") {
+  // Load the entity and check ownership. Admins view any payment page but
+  // don't upload on behalf of customers — enforcing "owner only" for uploads
+  // keeps the audit trail clean.
+  const entity =
+    kind === "booking"
+      ? await getBookingForOwnership(entityId)
+      : await getPassForOwnership(entityId);
+  if (!entity) {
     return {
       success: false,
-      error: `Booking is already ${booking.status}; upload is no longer available.`,
+      error: kind === "pass" ? "Pass not found." : "Booking not found.",
+    };
+  }
+  if (entity.user_id !== userId) {
+    return {
+      success: false,
+      error:
+        kind === "pass"
+          ? "You can only upload for your own pass."
+          : "You can only upload for your own booking.",
+    };
+  }
+  if (entity.status !== "pending") {
+    return {
+      success: false,
+      error: `${kind === "pass" ? "Pass" : "Booking"} is already ${entity.status}; upload is no longer available.`,
     };
   }
 
@@ -73,8 +92,6 @@ export async function uploadReceipt(
       error: "Please upload a screenshot of your payment (image only).",
     };
   }
-  // Mirror the client-side cap. A malicious client bypassing the UI will still
-  // be rejected before we spend time in sharp.
   if (file.size > CLIENT_UPLOAD_MAX_BYTES) {
     return {
       success: false,
@@ -88,7 +105,8 @@ export async function uploadReceipt(
     converted = await convertToWebp(bytes, RECEIPT_CONVERT_DEFAULTS);
   } catch (err) {
     logError("payment.receipt_convert_failed", err, {
-      bookingId,
+      kind,
+      entityId,
       size: file.size,
       mime: file.type,
     });
@@ -105,13 +123,13 @@ export async function uploadReceipt(
     };
   }
 
-  // Fixed path — same filename for every upload for this booking — so a new
+  // Fixed path — same filename for every upload for this entity — so a new
   // upload overwrites the prior receipt without leaving orphans. Ownership is
-  // encoded in the first path segment for bookkeeping, and enforced above via
-  // the explicit booking.user_id === userId check. We use the service client
-  // for the actual write because Supabase Storage's RLS evaluation is unstable
-  // under its own connection pool (cached plans reject valid writes).
-  const path = `${userId}/${bookingId}/${RECEIPT_FILENAME}`;
+  // encoded in the first path segment (and enforced above via the explicit
+  // user_id === userId check). Service client for the actual write because
+  // Supabase Storage's RLS is unreliable under its own connection pool.
+  const folder = kind === "pass" ? `pass-${entityId}` : entityId;
+  const path = `${userId}/${folder}/${RECEIPT_FILENAME}`;
 
   const service = createServiceClient();
   const { error: uploadError } = await service.storage
@@ -121,47 +139,56 @@ export async function uploadReceipt(
       upsert: true,
     });
   if (uploadError) {
-    logError("payment.receipt_upload_failed", uploadError, { bookingId });
+    logError("payment.receipt_upload_failed", uploadError, { kind, entityId });
     return { success: false, error: "Failed to upload receipt." };
   }
 
-  // Record the path (not a URL) — we sign on demand when rendering. Use the
-  // service client because the customer-scoped `bookings` RLS only permits
-  // admin updates; a user-scoped UPDATE here would silently affect 0 rows
-  // (RLS filters without raising), leaving the receipt file in storage but
-  // no DB pointer for /my-bookings or the admin to find. Ownership + pending
-  // status have already been checked above, so bypassing RLS is safe.
-  // `.select()` forces PostgREST to return the updated row, turning a silent
-  // 0-row outcome into an obvious error if this assumption ever breaks.
+  const table = kind === "pass" ? "entrance_passes" : "bookings";
   const { data: updated, error: updateError } = await service
-    .from("bookings")
+    .from(table)
     .update({ payment_receipt_url: path })
-    .eq("id", bookingId)
+    .eq("id", entityId)
     .select("id")
     .maybeSingle();
   if (updateError) {
-    logError("payment.receipt_persist_failed", updateError, { bookingId });
+    logError("payment.receipt_persist_failed", updateError, {
+      kind,
+      entityId,
+    });
     return { success: false, error: "Couldn't save receipt reference." };
   }
   if (!updated) {
     logError(
       "payment.receipt_persist_no_row",
       new Error("update affected 0 rows"),
-      { bookingId },
+      { kind, entityId },
     );
     return { success: false, error: "Couldn't save receipt reference." };
   }
 
-  await logAuditEvent("booking.receipt_uploaded", {
-    actorUserId: userId,
-    metadata: { booking_id: bookingId },
-  });
+  if (kind === "pass") {
+    await logAuditEvent("pass.receipt_uploaded", {
+      actorUserId: userId,
+      metadata: { pass_id: entityId },
+    });
+  } else {
+    await logAuditEvent("booking.receipt_uploaded", {
+      actorUserId: userId,
+      metadata: { booking_id: entityId },
+    });
+  }
 
   const signedUrl = await createReceiptSignedUrl(path);
 
-  revalidatePath(`/payment/${bookingId}`);
-  revalidatePath("/my-bookings");
-  revalidatePath(`/admin/bookings/${bookingId}`);
-  revalidatePath("/admin/bookings");
+  revalidatePath(`/payment/${entityId}`);
+  if (kind === "pass") {
+    revalidatePath("/my-passes");
+    revalidatePath(`/admin/passes/${entityId}`);
+    revalidatePath("/admin/passes");
+  } else {
+    revalidatePath("/my-bookings");
+    revalidatePath(`/admin/bookings/${entityId}`);
+    revalidatePath("/admin/bookings");
+  }
   return { success: true, path, signedUrl };
 }

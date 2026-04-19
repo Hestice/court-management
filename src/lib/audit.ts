@@ -20,7 +20,15 @@ export type AuditAction =
   | "booking.rescheduled"
   | "booking.cancelled"
   | "booking.completed"
-  | "booking.note_updated";
+  | "booking.note_updated"
+  | "pass.created"
+  | "pass.walkin_created"
+  | "pass.receipt_uploaded"
+  | "pass.approved"
+  | "pass.rejected"
+  | "pass.cancelled"
+  | "pass.note_updated"
+  | "pass.guest_redeemed";
 
 export type AuditMetadata = Record<string, unknown>;
 

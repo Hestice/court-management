@@ -72,3 +72,29 @@ export const listBookingActivity = cache(
     return (data ?? []) as unknown as BookingActivityRaw[];
   },
 );
+
+// Pass-scoped activity feed — same shape/contract as listBookingActivity, but
+// keyed on metadata->>pass_id. Separate helper so the filter column is
+// unambiguous; sharing the booking one would mean relying on a shared metadata
+// key, which we deliberately don't do (pass_id vs booking_id is self-
+// documenting in the audit rows).
+export const listPassActivity = cache(
+  async (params: {
+    passId: string;
+    actions: readonly string[];
+  }): Promise<BookingActivityRaw[]> => {
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .from("audit_logs")
+      .select(BOOKING_ACTIVITY_SELECT)
+      .in("action", [...params.actions])
+      .eq("metadata->>pass_id", params.passId)
+      .order("created_at", { ascending: true })
+      .limit(BOOKING_ACTIVITY_LIMIT);
+    if (error)
+      throwDataError("data.audit_logs.list_pass_activity", error, {
+        passId: params.passId,
+      });
+    return (data ?? []) as unknown as BookingActivityRaw[];
+  },
+);

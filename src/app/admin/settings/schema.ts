@@ -42,6 +42,10 @@ export const facilitySettingsSchema = z
       .int({ message: "Maximum booking duration must be a whole number." })
       .min(1, { message: "Maximum booking duration must be at least 1 hour." })
       .max(24, { message: "Maximum booking duration must be 24 or less." }),
+    entrance_pass_price_per_guest: z
+      .number({ message: "Entrance pass price must be a number." })
+      .min(0, { message: "Entrance pass price can't be negative." })
+      .max(100_000, { message: "Entrance pass price is unreasonably high." }),
   })
   .refine((v) => v.operating_hours_end > v.operating_hours_start, {
     message: "End must be after start.",
