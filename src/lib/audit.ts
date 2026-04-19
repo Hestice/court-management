@@ -24,6 +24,7 @@ export type AuditAction =
   | "booking.note_updated"
   | "booking.guest_count_changed"
   | "booking.guest_redeemed"
+  | "booking.guest_redeem_failed"
   | "walk_in_entry.created"
   | "walk_in_entry.deleted"
   | "walk_in_entry.note_updated";
