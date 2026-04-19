@@ -183,12 +183,9 @@ export function BookingView({
     });
   }
 
-  const startHourOptions = useMemo(() => {
-    if (!selectedCourt) return hoursInRange;
-    // Offer every operating hour; disable ones that aren't 'available' so users
-    // see why a cell on the grid isn't bookable.
-    return hoursInRange;
-  }, [selectedCourt, hoursInRange]);
+  // Offer every operating hour as a start option; individual options are
+  // disabled below when that hour isn't 'available' on the selected court.
+  const startHourOptions = hoursInRange;
 
   const totalAmount =
     selectedCourt && effectiveDuration > 0

@@ -1,7 +1,6 @@
 "use client";
 
 import { useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { toast } from "sonner";
@@ -21,7 +20,6 @@ import {
 import { Input } from "@/components/ui/input";
 
 export function SettingsForm({ defaults }: { defaults: FacilitySettingsValues }) {
-  const router = useRouter();
   const [pending, startTransition] = useTransition();
 
   const form = useForm<FacilitySettingsValues>({
@@ -34,8 +32,9 @@ export function SettingsForm({ defaults }: { defaults: FacilitySettingsValues })
       const result = await updateFacilitySettings(values);
       if (result.success) {
         toast.success("Settings saved");
+        // revalidatePath() in the server action re-renders this page with
+        // fresh data; no extra router.refresh() needed.
         form.reset(values);
-        router.refresh();
       } else {
         toast.error(result.error ?? "Failed to save settings.");
       }

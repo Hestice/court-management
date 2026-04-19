@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Pencil, Plus, Trash2 } from "lucide-react";
@@ -56,7 +55,6 @@ const PHP = new Intl.NumberFormat("en-PH", {
 });
 
 export function CourtsTable({ courts }: { courts: Court[] }) {
-  const router = useRouter();
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<Court | null>(null);
   const [deleting, setDeleting] = useState<Court | null>(null);
@@ -87,7 +85,7 @@ export function CourtsTable({ courts }: { courts: Court[] }) {
       if (result.success) {
         toast.success("Court deleted");
         setDeleting(null);
-        router.refresh();
+        // revalidatePath() in the server action refreshes this page.
       } else {
         toast.error(result.error ?? "Failed to delete court.");
       }
@@ -116,7 +114,6 @@ export function CourtsTable({ courts }: { courts: Court[] }) {
       }
       ctx.clear();
       setBulkConfirm(null);
-      router.refresh();
     });
   }
 
@@ -187,7 +184,6 @@ export function CourtsTable({ courts }: { courts: Court[] }) {
         <AddCourtsDialog
           courts={courts}
           onClose={() => setAddOpen(false)}
-          onSaved={() => router.refresh()}
         />
       ) : null}
 
@@ -195,7 +191,6 @@ export function CourtsTable({ courts }: { courts: Court[] }) {
         <EditCourtDialog
           court={editing}
           onClose={() => setEditing(null)}
-          onSaved={() => router.refresh()}
         />
       ) : null}
 
@@ -268,11 +263,9 @@ export function CourtsTable({ courts }: { courts: Court[] }) {
 function AddCourtsDialog({
   courts,
   onClose,
-  onSaved,
 }: {
   courts: Court[];
   onClose: () => void;
-  onSaved: () => void;
 }) {
   const [pending, startTransition] = useTransition();
 
@@ -316,7 +309,6 @@ function AddCourtsDialog({
             ? "Court added"
             : `${values.quantity} courts added`,
         );
-        onSaved();
         onClose();
       } else {
         toast.error(result.error ?? "Failed to add courts.");
@@ -424,11 +416,9 @@ function AddCourtsDialog({
 function EditCourtDialog({
   court,
   onClose,
-  onSaved,
 }: {
   court: Court;
   onClose: () => void;
-  onSaved: () => void;
 }) {
   const [pending, startTransition] = useTransition();
 
@@ -446,7 +436,6 @@ function EditCourtDialog({
       const result = await updateCourt(court.id, values);
       if (result.success) {
         toast.success("Court updated");
-        onSaved();
         onClose();
       } else {
         toast.error(result.error ?? "Failed to update court.");
