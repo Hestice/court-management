@@ -97,6 +97,48 @@ export type Database = {
           },
         ]
       }
+      booking_guests: {
+        Row: {
+          booking_id: string
+          guest_number: number
+          id: string
+          qr_code: string
+          redeemed_at: string | null
+          redeemed_by: string | null
+        }
+        Insert: {
+          booking_id: string
+          guest_number?: number
+          id?: string
+          qr_code: string
+          redeemed_at?: string | null
+          redeemed_by?: string | null
+        }
+        Update: {
+          booking_id?: string
+          guest_number?: number
+          id?: string
+          qr_code?: string
+          redeemed_at?: string | null
+          redeemed_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "booking_guests_booking_id_fkey"
+            columns: ["booking_id"]
+            isOneToOne: false
+            referencedRelation: "bookings"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "booking_guests_redeemed_by_fkey"
+            columns: ["redeemed_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       bookings: {
         Row: {
           admin_notes: string | null
@@ -105,6 +147,7 @@ export type Database = {
           created_at: string
           end_hour: number
           expires_at: string | null
+          guest_count: number
           id: string
           payment_receipt_url: string | null
           start_hour: number
@@ -122,6 +165,7 @@ export type Database = {
           created_at?: string
           end_hour: number
           expires_at?: string | null
+          guest_count?: number
           id?: string
           payment_receipt_url?: string | null
           start_hour: number
@@ -139,6 +183,7 @@ export type Database = {
           created_at?: string
           end_hour?: number
           expires_at?: string | null
+          guest_count?: number
           id?: string
           payment_receipt_url?: string | null
           start_hour?: number
@@ -226,54 +271,11 @@ export type Database = {
         }
         Relationships: []
       }
-      entrance_passes: {
-        Row: {
-          created_at: string
-          guest_count: number
-          id: string
-          pass_date: string
-          payment_receipt_url: string | null
-          status: string
-          total_amount: number
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          created_at?: string
-          guest_count: number
-          id?: string
-          pass_date: string
-          payment_receipt_url?: string | null
-          status?: string
-          total_amount: number
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          guest_count?: number
-          id?: string
-          pass_date?: string
-          payment_receipt_url?: string | null
-          status?: string
-          total_amount?: number
-          updated_at?: string
-          user_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "entrance_passes_user_id_fkey"
-            columns: ["user_id"]
-            isOneToOne: false
-            referencedRelation: "users"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       facility_settings: {
         Row: {
           contact_email: string | null
           contact_phone: string | null
+          entrance_pass_price_per_guest: number
           facility_name: string
           id: number
           max_booking_duration_hours: number
@@ -285,6 +287,7 @@ export type Database = {
         Insert: {
           contact_email?: string | null
           contact_phone?: string | null
+          entrance_pass_price_per_guest?: number
           facility_name?: string
           id?: number
           max_booking_duration_hours?: number
@@ -296,6 +299,7 @@ export type Database = {
         Update: {
           contact_email?: string | null
           contact_phone?: string | null
+          entrance_pass_price_per_guest?: number
           facility_name?: string
           id?: number
           max_booking_duration_hours?: number
@@ -305,45 +309,6 @@ export type Database = {
           updated_at?: string
         }
         Relationships: []
-      }
-      pass_guests: {
-        Row: {
-          id: string
-          pass_id: string
-          qr_code: string
-          redeemed_at: string | null
-          redeemed_by: string | null
-        }
-        Insert: {
-          id?: string
-          pass_id: string
-          qr_code: string
-          redeemed_at?: string | null
-          redeemed_by?: string | null
-        }
-        Update: {
-          id?: string
-          pass_id?: string
-          qr_code?: string
-          redeemed_at?: string | null
-          redeemed_by?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "pass_guests_pass_id_fkey"
-            columns: ["pass_id"]
-            isOneToOne: false
-            referencedRelation: "entrance_passes"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "pass_guests_redeemed_by_fkey"
-            columns: ["redeemed_by"]
-            isOneToOne: false
-            referencedRelation: "users"
-            referencedColumns: ["id"]
-          },
-        ]
       }
       payment_methods: {
         Row: {
@@ -416,6 +381,60 @@ export type Database = {
           role?: string
         }
         Relationships: []
+      }
+      walk_in_entries: {
+        Row: {
+          created_at: string
+          created_by: string
+          entry_date: string
+          guest_count: number
+          id: string
+          linked_booking_id: string | null
+          notes: string | null
+          total_amount: number
+          walk_in_name: string | null
+          walk_in_phone: string | null
+        }
+        Insert: {
+          created_at?: string
+          created_by: string
+          entry_date: string
+          guest_count: number
+          id?: string
+          linked_booking_id?: string | null
+          notes?: string | null
+          total_amount: number
+          walk_in_name?: string | null
+          walk_in_phone?: string | null
+        }
+        Update: {
+          created_at?: string
+          created_by?: string
+          entry_date?: string
+          guest_count?: number
+          id?: string
+          linked_booking_id?: string | null
+          notes?: string | null
+          total_amount?: number
+          walk_in_name?: string | null
+          walk_in_phone?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "walk_in_entries_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "walk_in_entries_linked_booking_id_fkey"
+            columns: ["linked_booking_id"]
+            isOneToOne: false
+            referencedRelation: "bookings"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Views: {
