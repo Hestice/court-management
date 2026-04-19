@@ -27,6 +27,7 @@ const ACTIVITY_ACTIONS = [
   "booking.rejected",
   "booking.rescheduled",
   "booking.cancelled",
+  "booking.restored",
   "booking.completed",
   "booking.note_updated",
   "booking.guest_count_changed",
