@@ -24,7 +24,11 @@ import {
 } from "./schema";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
+import {
+  DataTable,
+  type DataTableBulkActionContext,
+  type DataTableColumn,
+} from "@/components/ui/data-table";
 import {
   Dialog,
   DialogContent,
@@ -44,23 +48,6 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import {
-  Pagination,
-  PaginationContent,
-  PaginationEllipsis,
-  PaginationItem,
-  PaginationLink,
-  PaginationNext,
-  PaginationPrevious,
-} from "@/components/ui/pagination";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 
 const PHP = new Intl.NumberFormat("en-PH", {
   style: "currency",
@@ -68,73 +55,29 @@ const PHP = new Intl.NumberFormat("en-PH", {
   maximumFractionDigits: 2,
 });
 
-const PAGE_SIZE = 10;
-
-// Produce a compact page number list with ellipses: 1, …, 4, 5, 6, …, 10.
-// Always includes first + last + a window around the current page.
-function pageNumbers(current: number, total: number): Array<number | "ellipsis"> {
-  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
-  const out: Array<number | "ellipsis"> = [1];
-  const windowStart = Math.max(2, current - 1);
-  const windowEnd = Math.min(total - 1, current + 1);
-  if (windowStart > 2) out.push("ellipsis");
-  for (let p = windowStart; p <= windowEnd; p++) out.push(p);
-  if (windowEnd < total - 1) out.push("ellipsis");
-  out.push(total);
-  return out;
-}
-
 export function CourtsTable({ courts }: { courts: Court[] }) {
   const router = useRouter();
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<Court | null>(null);
   const [deleting, setDeleting] = useState<Court | null>(null);
   const [deletePending, startDeleteTransition] = useTransition();
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
+  const [bulkConfirm, setBulkConfirm] = useState<{
+    ctx: DataTableBulkActionContext<Court>;
+  } | null>(null);
   const [bulkPending, startBulkTransition] = useTransition();
-  const [page, setPage] = useState(1);
 
-  const existingIds = new Set(courts.map((c) => c.id));
-  const selectedIds = Array.from(selected).filter((id) => existingIds.has(id));
-  const selectedCount = selectedIds.length;
-
-  const totalPages = Math.max(1, Math.ceil(courts.length / PAGE_SIZE));
-  const safePage = Math.min(page, totalPages);
-  const pageStart = (safePage - 1) * PAGE_SIZE;
-  const pageCourts = courts.slice(pageStart, pageStart + PAGE_SIZE);
-
-  useEffect(() => {
-    if (page !== safePage) setPage(safePage);
-  }, [page, safePage]);
-
-  // Header checkbox reflects only the visible page.
-  const pageIds = pageCourts.map((c) => c.id);
-  const selectedOnPage = pageIds.filter((id) => selected.has(id)).length;
-  const allPageSelected = pageIds.length > 0 && selectedOnPage === pageIds.length;
-  const headerState: boolean | "indeterminate" =
-    selectedOnPage === 0 ? false : allPageSelected ? true : "indeterminate";
-
-  function toggleRow(id: string, checked: boolean) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (checked) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-  }
-
-  function toggleAllOnPage() {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (allPageSelected || selectedOnPage > 0) {
-        for (const id of pageIds) next.delete(id);
-      } else {
-        for (const id of pageIds) next.add(id);
-      }
-      return next;
-    });
-  }
+  const columns: DataTableColumn<Court>[] = [
+    { header: "Name", cell: (c) => c.name, className: "font-medium" },
+    { header: "Hourly Rate", cell: (c) => PHP.format(c.hourly_rate) },
+    {
+      header: "Status",
+      cell: (c) => (
+        <Badge variant={c.is_active ? "default" : "secondary"}>
+          {c.is_active ? "Active" : "Inactive"}
+        </Badge>
+      ),
+    },
+  ];
 
   function onDeleteConfirm() {
     if (!deleting) return;
@@ -152,12 +95,10 @@ export function CourtsTable({ courts }: { courts: Court[] }) {
   }
 
   function onBulkDeleteConfirm() {
-    if (selectedIds.length === 0) return;
-    const targets = selectedIds;
+    if (!bulkConfirm) return;
+    const { ctx } = bulkConfirm;
     startBulkTransition(async () => {
-      const result = await deleteCourts(targets);
-      const { deletedCount, failedNames } = result;
-
+      const { deletedCount, failedNames } = await deleteCourts(ctx.ids);
       if (deletedCount > 0 && failedNames.length === 0) {
         toast.success(
           deletedCount === 1
@@ -173,12 +114,13 @@ export function CourtsTable({ courts }: { courts: Court[] }) {
           `Couldn't delete ${failedNames.join(", ")} — they have existing bookings. Toggle inactive instead.`,
         );
       }
-
-      setSelected(new Set());
-      setBulkConfirmOpen(false);
+      ctx.clear();
+      setBulkConfirm(null);
       router.refresh();
     });
   }
+
+  const pendingBulkCount = bulkConfirm?.ctx.ids.length ?? 0;
 
   return (
     <>
@@ -191,156 +133,55 @@ export function CourtsTable({ courts }: { courts: Court[] }) {
             Manage court names, rates, and availability.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {selectedCount > 0 ? (
-            <Button
-              variant="destructive"
-              onClick={() => setBulkConfirmOpen(true)}
-            >
-              <Trash2 className="h-4 w-4" aria-hidden />
-              Delete {selectedCount}
-            </Button>
-          ) : null}
-          <Button onClick={() => setAddOpen(true)}>
-            <Plus className="h-4 w-4" aria-hidden />
-            Add Court
-          </Button>
-        </div>
+        <Button onClick={() => setAddOpen(true)}>
+          <Plus className="h-4 w-4" aria-hidden />
+          Add Court
+        </Button>
       </div>
 
-      {courts.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border px-6 py-12 text-center">
+      <DataTable
+        rows={courts}
+        rowKey={(c) => c.id}
+        columns={columns}
+        selection
+        empty={
           <p className="text-sm text-muted-foreground">
             No courts yet. Add your first court to get started.
           </p>
-        </div>
-      ) : (
-        <div className="rounded-lg border border-border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-[1%]">
-                  <Checkbox
-                    checked={headerState}
-                    onCheckedChange={toggleAllOnPage}
-                    aria-label="Select courts on this page"
-                  />
-                </TableHead>
-                <TableHead>Name</TableHead>
-                <TableHead>Hourly Rate</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="w-[1%] text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {pageCourts.map((court) => {
-                const isSelected = selected.has(court.id);
-                return (
-                <TableRow key={court.id} data-state={isSelected ? "selected" : undefined}>
-                  <TableCell>
-                    <Checkbox
-                      checked={isSelected}
-                      onCheckedChange={(c) => toggleRow(court.id, c === true)}
-                      aria-label={`Select ${court.name}`}
-                    />
-                  </TableCell>
-                  <TableCell className="font-medium">{court.name}</TableCell>
-                  <TableCell>{PHP.format(court.hourly_rate)}</TableCell>
-                  <TableCell>
-                    <Badge variant={court.is_active ? "default" : "secondary"}>
-                      {court.is_active ? "Active" : "Inactive"}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex justify-end gap-1">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => setEditing(court)}
-                        aria-label={`Edit ${court.name}`}
-                      >
-                        <Pencil className="h-4 w-4" aria-hidden />
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => setDeleting(court)}
-                        aria-label={`Delete ${court.name}`}
-                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                      >
-                        <Trash2 className="h-4 w-4" aria-hidden />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </div>
-      )}
-
-      {courts.length > 0 ? (
-        <div className="flex items-center justify-between gap-4 text-sm text-muted-foreground">
-          <div>
-            Showing {pageStart + 1}–{pageStart + pageCourts.length} of {courts.length}
-          </div>
-          {totalPages > 1 ? (
-            <Pagination className="mx-0 w-auto justify-end">
-              <PaginationContent>
-                <PaginationItem>
-                  <PaginationPrevious
-                    href="#"
-                    aria-disabled={safePage === 1}
-                    className={
-                      safePage === 1 ? "pointer-events-none opacity-50" : ""
-                    }
-                    onClick={(e) => {
-                      e.preventDefault();
-                      if (safePage > 1) setPage(safePage - 1);
-                    }}
-                  />
-                </PaginationItem>
-                {pageNumbers(safePage, totalPages).map((p, i) =>
-                  p === "ellipsis" ? (
-                    <PaginationItem key={`ellipsis-${i}`}>
-                      <PaginationEllipsis />
-                    </PaginationItem>
-                  ) : (
-                    <PaginationItem key={p}>
-                      <PaginationLink
-                        href="#"
-                        isActive={p === safePage}
-                        onClick={(e) => {
-                          e.preventDefault();
-                          setPage(p);
-                        }}
-                      >
-                        {p}
-                      </PaginationLink>
-                    </PaginationItem>
-                  ),
-                )}
-                <PaginationItem>
-                  <PaginationNext
-                    href="#"
-                    aria-disabled={safePage === totalPages}
-                    className={
-                      safePage === totalPages
-                        ? "pointer-events-none opacity-50"
-                        : ""
-                    }
-                    onClick={(e) => {
-                      e.preventDefault();
-                      if (safePage < totalPages) setPage(safePage + 1);
-                    }}
-                  />
-                </PaginationItem>
-              </PaginationContent>
-            </Pagination>
-          ) : null}
-        </div>
-      ) : null}
+        }
+        rowSelectionAriaLabel={(c) => `Select ${c.name}`}
+        bulkActions={[
+          {
+            label: (n) => `Delete ${n}`,
+            pendingLabel: () => "Deleting…",
+            pending: bulkPending,
+            variant: "destructive",
+            icon: Trash2,
+            onClick: (ctx) => setBulkConfirm({ ctx }),
+          },
+        ]}
+        rowActions={(court) => (
+          <>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setEditing(court)}
+              aria-label={`Edit ${court.name}`}
+            >
+              <Pencil className="h-4 w-4" aria-hidden />
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setDeleting(court)}
+              aria-label={`Delete ${court.name}`}
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+            >
+              <Trash2 className="h-4 w-4" aria-hidden />
+            </Button>
+          </>
+        )}
+      />
 
       {addOpen ? (
         <AddCourtsDialog
@@ -386,13 +227,14 @@ export function CourtsTable({ courts }: { courts: Court[] }) {
       </Dialog>
 
       <Dialog
-        open={bulkConfirmOpen}
-        onOpenChange={(o) => !o && !bulkPending && setBulkConfirmOpen(false)}
+        open={!!bulkConfirm}
+        onOpenChange={(o) => !o && !bulkPending && setBulkConfirm(null)}
       >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              Delete {selectedCount} {selectedCount === 1 ? "court" : "courts"}?
+              Delete {pendingBulkCount}{" "}
+              {pendingBulkCount === 1 ? "court" : "courts"}?
             </DialogTitle>
             <DialogDescription>
               This cannot be undone. Courts with existing bookings will be
@@ -402,7 +244,7 @@ export function CourtsTable({ courts }: { courts: Court[] }) {
           <DialogFooter>
             <Button
               variant="ghost"
-              onClick={() => setBulkConfirmOpen(false)}
+              onClick={() => setBulkConfirm(null)}
               disabled={bulkPending}
             >
               Cancel
@@ -414,7 +256,7 @@ export function CourtsTable({ courts }: { courts: Court[] }) {
             >
               {bulkPending
                 ? "Deleting…"
-                : `Delete ${selectedCount} ${selectedCount === 1 ? "court" : "courts"}`}
+                : `Delete ${pendingBulkCount} ${pendingBulkCount === 1 ? "court" : "courts"}`}
             </Button>
           </DialogFooter>
         </DialogContent>

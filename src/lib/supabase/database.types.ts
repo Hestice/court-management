@@ -69,13 +69,16 @@ export type Database = {
           court_id: string
           created_at: string
           end_hour: number
+          expires_at: string | null
           id: string
           payment_receipt_url: string | null
           start_hour: number
           status: string
           total_amount: number
           updated_at: string
-          user_id: string
+          user_id: string | null
+          walk_in_name: string | null
+          walk_in_phone: string | null
         }
         Insert: {
           admin_notes?: string | null
@@ -83,13 +86,16 @@ export type Database = {
           court_id: string
           created_at?: string
           end_hour: number
+          expires_at?: string | null
           id?: string
           payment_receipt_url?: string | null
           start_hour: number
           status?: string
           total_amount: number
           updated_at?: string
-          user_id: string
+          user_id?: string | null
+          walk_in_name?: string | null
+          walk_in_phone?: string | null
         }
         Update: {
           admin_notes?: string | null
@@ -97,13 +103,16 @@ export type Database = {
           court_id?: string
           created_at?: string
           end_hour?: number
+          expires_at?: string | null
           id?: string
           payment_receipt_url?: string | null
           start_hour?: number
           status?: string
           total_amount?: number
           updated_at?: string
-          user_id?: string
+          user_id?: string | null
+          walk_in_name?: string | null
+          walk_in_phone?: string | null
         }
         Relationships: [
           {
@@ -232,8 +241,10 @@ export type Database = {
           contact_phone: string | null
           facility_name: string
           id: number
+          max_booking_duration_hours: number
           operating_hours_end: number
           operating_hours_start: number
+          pending_expiry_hours: number
           updated_at: string
         }
         Insert: {
@@ -241,8 +252,10 @@ export type Database = {
           contact_phone?: string | null
           facility_name?: string
           id?: number
+          max_booking_duration_hours?: number
           operating_hours_end?: number
           operating_hours_start?: number
+          pending_expiry_hours?: number
           updated_at?: string
         }
         Update: {
@@ -250,8 +263,10 @@ export type Database = {
           contact_phone?: string | null
           facility_name?: string
           id?: number
+          max_booking_duration_hours?: number
           operating_hours_end?: number
           operating_hours_start?: number
+          pending_expiry_hours?: number
           updated_at?: string
         }
         Relationships: []
