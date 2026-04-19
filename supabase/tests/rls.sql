@@ -36,16 +36,16 @@ insert into public.courts (id, name, hourly_rate, is_active) values
   on conflict (id) do nothing;
 
 insert into public.bookings
-  (id, user_id, court_id, booking_date, start_hour, end_hour, status, total_amount)
+  (id, user_id, court_id, booking_date, start_hour, end_hour, status, total_amount, guest_count)
 values
   ('b1111111-1111-1111-1111-111111111111',
    '11111111-1111-1111-1111-111111111111',
    'c0000000-0000-0000-0000-000000000000',
-   current_date + 10, 8, 10, 'pending', 200),
+   current_date + 10, 8, 10, 'pending', 200, 1),
   ('b2222222-2222-2222-2222-222222222222',
    '22222222-2222-2222-2222-222222222222',
    'c0000000-0000-0000-0000-000000000000',
-   current_date + 11, 10, 12, 'pending', 200)
+   current_date + 11, 10, 12, 'pending', 200, 1)
   on conflict (id) do nothing;
 
 -- -----------------------------------------------------------------------------
@@ -181,9 +181,78 @@ select 'TEST 12 user A reads inquiries' as test, count(*)
 from public.contact_inquiries;
 -- Expected: 0
 
+-- -----------------------------------------------------------------------------
+-- TEST 13 — User A can insert a booking_guests row for their own booking
+-- Impersonate user: 11111111-1111-1111-1111-111111111111
+-- -----------------------------------------------------------------------------
+insert into public.booking_guests (booking_id, guest_number, qr_code)
+values (
+  'b1111111-1111-1111-1111-111111111111',
+  1,
+  'rls-test-qr-' || gen_random_uuid()::text
+);
+-- Expected: INSERT 0 1
+
+-- -----------------------------------------------------------------------------
+-- TEST 14 — User A CANNOT insert a booking_guests row for User B's booking
+-- Impersonate user: 11111111-1111-1111-1111-111111111111
+-- -----------------------------------------------------------------------------
+insert into public.booking_guests (booking_id, guest_number, qr_code)
+values (
+  'b2222222-2222-2222-2222-222222222222',
+  1,
+  'rls-test-foreign-' || gen_random_uuid()::text
+);
+-- Expected: ERROR new row violates row-level security policy
+
+-- -----------------------------------------------------------------------------
+-- TEST 15 — User A reads only their own booking's guest rows
+-- Impersonate user: 11111111-1111-1111-1111-111111111111
+-- -----------------------------------------------------------------------------
+select 'TEST 15 user A reads own booking_guests' as test,
+       count(*) filter (where booking_id = 'b1111111-1111-1111-1111-111111111111') as own,
+       count(*) filter (where booking_id = 'b2222222-2222-2222-2222-222222222222') as foreign_rows
+from public.booking_guests
+where booking_id in (
+  'b1111111-1111-1111-1111-111111111111',
+  'b2222222-2222-2222-2222-222222222222'
+);
+-- Expected: own >= 1, foreign_rows = 0
+
+-- -----------------------------------------------------------------------------
+-- TEST 16 — Non-admin CANNOT read walk_in_entries (admin-only log)
+-- Impersonate user: 11111111-1111-1111-1111-111111111111
+-- -----------------------------------------------------------------------------
+select 'TEST 16 user A reads walk_in_entries' as test, count(*)
+from public.walk_in_entries;
+-- Expected: 0
+
+-- -----------------------------------------------------------------------------
+-- TEST 17 — Non-admin CANNOT insert walk_in_entries
+-- Impersonate user: 11111111-1111-1111-1111-111111111111
+-- -----------------------------------------------------------------------------
+insert into public.walk_in_entries
+  (entry_date, guest_count, total_amount, created_by)
+values
+  (current_date, 1, 100, '11111111-1111-1111-1111-111111111111');
+-- Expected: ERROR new row violates row-level security policy
+
+-- -----------------------------------------------------------------------------
+-- TEST 18 — Admin can insert walk_in_entries
+-- Impersonate user: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
+-- -----------------------------------------------------------------------------
+insert into public.walk_in_entries
+  (entry_date, guest_count, walk_in_name, total_amount, created_by)
+values
+  (current_date, 2, 'RLS Walk-In Entry', 200,
+   'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa');
+-- Expected: INSERT 0 1
+
 -- =============================================================================
 -- CLEANUP (run as service_role)
 -- =============================================================================
+-- delete from public.booking_guests where qr_code like 'rls-test-%';
+-- delete from public.walk_in_entries where walk_in_name = 'RLS Walk-In Entry';
 -- delete from public.bookings
 --   where user_id in (
 --     '11111111-1111-1111-1111-111111111111',
