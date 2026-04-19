@@ -18,7 +18,12 @@ import {
   formatHour,
   formatHourRange,
 } from "@/lib/timezone";
-import { addDaysIso, BOOKING_DATE_MAX_DAYS } from "@/lib/zod-helpers";
+import {
+  addDaysIso,
+  BOOKING_DATE_MAX_DAYS,
+  GUEST_COUNT_MAX,
+  GUEST_COUNT_MIN,
+} from "@/lib/zod-helpers";
 import { cn } from "@/lib/utils";
 
 import { createWalkinBooking } from "../actions";
@@ -47,6 +52,7 @@ export function WalkinView({
   operatingStart,
   operatingEnd,
   maxDuration,
+  entrancePricePerGuest,
 }: {
   today: string;
   initialDate: string;
@@ -54,6 +60,7 @@ export function WalkinView({
   operatingStart: number;
   operatingEnd: number;
   maxDuration: number;
+  entrancePricePerGuest: number;
 }) {
   const router = useRouter();
   const [name, setName] = useState("");
@@ -66,6 +73,7 @@ export function WalkinView({
   );
   const [startHour, setStartHour] = useState(operatingStart);
   const [duration, setDuration] = useState(1);
+  const [guestCount, setGuestCount] = useState(1);
   const [loading, startLoading] = useTransition();
   const [submitting, startSubmitting] = useTransition();
 
@@ -100,11 +108,17 @@ export function WalkinView({
       ? 0
       : Math.min(Math.max(1, duration), maxPossibleDuration);
 
+  const safeGuestCount = Math.min(
+    Math.max(Number.isFinite(guestCount) ? guestCount : 0, 0),
+    GUEST_COUNT_MAX,
+  );
   const summaryEndHour = startHour + effectiveDuration;
-  const totalAmount =
+  const courtRentalTotal =
     selectedCourt && effectiveDuration > 0
       ? selectedCourt.court.hourly_rate * effectiveDuration
       : 0;
+  const entranceTotal = entrancePricePerGuest * safeGuestCount;
+  const totalAmount = courtRentalTotal + entranceTotal;
 
   function handleDateChange(next: string) {
     if (!next || next === date) return;
@@ -134,6 +148,7 @@ export function WalkinView({
 
   function onSubmit() {
     if (!name.trim() || !courtId || effectiveDuration === 0) return;
+    if (safeGuestCount < GUEST_COUNT_MIN) return;
     startSubmitting(async () => {
       const res = await createWalkinBooking({
         walk_in_name: name.trim(),
@@ -142,6 +157,7 @@ export function WalkinView({
         booking_date: date,
         start_hour: startHour,
         duration_hours: effectiveDuration,
+        guest_count: safeGuestCount,
       });
       if (res.success) {
         toast.success("Walk-in booking created");
@@ -306,22 +322,69 @@ export function WalkinView({
             ) : null}
           </label>
 
+          <label className="flex flex-col gap-1">
+            <span className="text-sm font-medium">Number of guests</span>
+            <Input
+              type="number"
+              inputMode="numeric"
+              min={GUEST_COUNT_MIN}
+              max={GUEST_COUNT_MAX}
+              step={1}
+              value={Number.isFinite(guestCount) ? guestCount : ""}
+              onChange={(e) => {
+                const n = e.target.valueAsNumber;
+                setGuestCount(Number.isFinite(n) ? Math.floor(n) : 0);
+              }}
+              disabled={submitting}
+            />
+            <span className="text-xs text-muted-foreground">
+              Entrance: {formatPHP(entrancePricePerGuest)}/person.
+            </span>
+          </label>
+
           <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
             {selectedCourt && effectiveDuration > 0 ? (
-              <div className="flex flex-col gap-1">
-                <p>
-                  <span className="font-medium">
-                    {selectedCourt.court.name}
+              <div className="flex flex-col gap-2">
+                <div className="flex flex-col gap-1">
+                  <p>
+                    <span className="font-medium">
+                      {selectedCourt.court.name}
+                    </span>
+                    {" · "}
+                    {formatFacilityDate(date)}
+                  </p>
+                  <p className="text-muted-foreground">
+                    {formatHourRange(startHour, summaryEndHour)} (
+                    {effectiveDuration}{" "}
+                    {effectiveDuration === 1 ? "hour" : "hours"})
+                  </p>
+                </div>
+                <div className="flex flex-col gap-1 border-t border-border pt-2 text-xs">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-muted-foreground">
+                      Court rental: {formatPHP(selectedCourt.court.hourly_rate)}/hr ×{" "}
+                      {effectiveDuration}
+                    </span>
+                    <span className="tabular-nums">
+                      {formatPHP(courtRentalTotal)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-muted-foreground">
+                      Entrance: {formatPHP(entrancePricePerGuest)}/person ×{" "}
+                      {safeGuestCount}
+                    </span>
+                    <span className="tabular-nums">
+                      {formatPHP(entranceTotal)}
+                    </span>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between border-t border-border pt-2">
+                  <span className="font-medium">Total</span>
+                  <span className="text-base font-semibold tabular-nums">
+                    {formatPHP(totalAmount)}
                   </span>
-                  {" · "}
-                  {formatFacilityDate(date)}
-                </p>
-                <p className="text-muted-foreground">
-                  {formatHourRange(startHour, summaryEndHour)} (
-                  {effectiveDuration}{" "}
-                  {effectiveDuration === 1 ? "hour" : "hours"})
-                </p>
-                <p className="font-semibold">{formatPHP(totalAmount)}</p>
+                </div>
               </div>
             ) : (
               <p className="text-muted-foreground">
@@ -337,14 +400,15 @@ export function WalkinView({
               loading ||
               !name.trim() ||
               !courtId ||
-              effectiveDuration === 0
+              effectiveDuration === 0 ||
+              safeGuestCount < GUEST_COUNT_MIN
             }
           >
             {submitting ? "Creating…" : "Create booking"}
           </Button>
           <p className="text-xs text-muted-foreground">
-            This booking goes straight to confirmed — no pending state and no
-            receipt collection.
+            Booking goes straight to confirmed. QR codes are generated for
+            each guest.
           </p>
         </aside>
       </div>

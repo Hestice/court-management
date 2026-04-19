@@ -20,6 +20,7 @@ export default async function AdminBookingsPage() {
     end_hour: b.end_hour,
     status: b.status as BookingStatus,
     total_amount: Number(b.total_amount),
+    guest_count: b.guest_count,
     expires_at: b.expires_at,
     created_at: b.created_at,
     payment_receipt_url: b.payment_receipt_url,

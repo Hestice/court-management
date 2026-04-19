@@ -10,8 +10,11 @@ import {
   getBookingForApprove,
   getBookingForCancel,
   getBookingForComplete,
+  getBookingForGuestEdit,
   getBookingForNotes,
   getBookingForReschedule,
+  getBookingGuestForRedeem,
+  listBookingGuestsForBooking,
 } from "@/lib/data/bookings";
 import { logError } from "@/lib/logger";
 import { deleteBookingReceipt } from "@/lib/receipt";
@@ -20,16 +23,37 @@ import { addDaysIso, BOOKING_DATE_MAX_DAYS } from "@/lib/zod-helpers";
 
 import {
   cancelSchema,
+  editGuestCountSchema,
   notesSchema,
   rejectSchema,
   rescheduleSchema,
   walkinSchema,
   type CancelValues,
+  type EditGuestCountValues,
   type NotesValues,
   type RejectValues,
   type RescheduleValues,
   type WalkinValues,
 } from "./schema";
+
+// Per-guest QR payload. 128+ bits of randomness, URL-safe, unguessable. The
+// short prefix is purely diagnostic — makes a scanned code self-describing
+// during a support call.
+function newQrCode(): string {
+  return `booking_${crypto.randomUUID()}`;
+}
+
+function buildGuestRows(
+  bookingId: string,
+  startNumber: number,
+  count: number,
+): { booking_id: string; guest_number: number; qr_code: string }[] {
+  return Array.from({ length: count }, (_, i) => ({
+    booking_id: bookingId,
+    guest_number: startNumber + i,
+    qr_code: newQrCode(),
+  }));
+}
 
 // Postgres exclusion_violation fired by bookings_no_overlap. We translate it
 // into the same friendly message on every action path so admins get one
@@ -95,10 +119,35 @@ export async function approveBooking(
     return { success: false, error: "Couldn't approve booking." };
   }
 
+  // Generate one QR per guest on confirmation. A prior approval/rollback
+  // combination could leave the table with partial rows — fetch what exists
+  // first so we only fill the gap rather than re-keying already-issued codes.
+  const existing = await listBookingGuestsForBooking(bookingId);
+  const existingCount = existing.length;
+  if (existingCount < booking.guest_count) {
+    const { error: guestsError } = await supabase
+      .from("booking_guests")
+      .insert(
+        buildGuestRows(
+          bookingId,
+          existingCount + 1,
+          booking.guest_count - existingCount,
+        ),
+      );
+    if (guestsError) {
+      logError("booking.approve_guests_failed", guestsError, {
+        bookingId,
+        existingCount,
+        guestCount: booking.guest_count,
+      });
+      return { success: false, error: "Couldn't generate guest QR codes." };
+    }
+  }
+
   await deleteBookingReceipt(booking.payment_receipt_url);
   await logAuditEvent("booking.approved", {
     actorUserId: userId,
-    metadata: { booking_id: bookingId },
+    metadata: { booking_id: bookingId, guest_count: booking.guest_count },
   });
 
   revalidateBookingRoutes(bookingId);
@@ -227,7 +276,25 @@ export async function rescheduleBooking(
     };
   }
 
-  const total_amount = Number(court.hourly_rate) * duration_hours;
+  // reschedule only changes court/time, never guest count — but the total
+  // still needs the entrance component so it stays consistent with the create
+  // path. Reload guest_count from the booking we already fetched.
+  const { data: currentRow, error: currentRowError } = await supabase
+    .from("bookings")
+    .select("guest_count")
+    .eq("id", bookingId)
+    .maybeSingle();
+  if (currentRowError || !currentRow) {
+    logError(
+      "booking.reschedule_load_guest_count_failed",
+      currentRowError ?? null,
+      { bookingId },
+    );
+    return { success: false, error: "Couldn't reschedule booking." };
+  }
+  const total_amount =
+    Number(court.hourly_rate) * duration_hours +
+    Number(settings.entrance_pass_price_per_guest) * currentRow.guest_count;
 
   const { error: updateError } = await supabase
     .from("bookings")
@@ -432,7 +499,13 @@ export async function createWalkinBooking(
   if (!auth.ok) return { success: false, error: auth.error };
   const { supabase, userId } = auth;
 
-  const { court_id, booking_date, start_hour, duration_hours } = parsed.data;
+  const {
+    court_id,
+    booking_date,
+    start_hour,
+    duration_hours,
+    guest_count,
+  } = parsed.data;
   const end_hour = start_hour + duration_hours;
 
   const today = todayInFacility();
@@ -478,7 +551,9 @@ export async function createWalkinBooking(
     };
   }
 
-  const total_amount = Number(court.hourly_rate) * duration_hours;
+  const total_amount =
+    Number(court.hourly_rate) * duration_hours +
+    Number(settings.entrance_pass_price_per_guest) * guest_count;
   const walk_in_phone = parsed.data.walk_in_phone?.trim() || null;
 
   const { data: inserted, error: insertError } = await supabase
@@ -494,6 +569,7 @@ export async function createWalkinBooking(
       // Walk-ins are paid in-person; no pending state, no expiry, no receipt.
       status: "confirmed",
       total_amount,
+      guest_count,
     })
     .select("id")
     .single();
@@ -510,6 +586,28 @@ export async function createWalkinBooking(
     return { success: false, error: "Couldn't create walk-in booking." };
   }
 
+  const { error: guestsError } = await supabase
+    .from("booking_guests")
+    .insert(buildGuestRows(inserted.id, 1, guest_count));
+
+  if (guestsError) {
+    // Rollback the booking so we don't leave a confirmed row with no QRs.
+    const { error: rollbackError } = await supabase
+      .from("bookings")
+      .delete()
+      .eq("id", inserted.id);
+    if (rollbackError) {
+      logError("booking.walkin_rollback_failed", rollbackError, {
+        bookingId: inserted.id,
+      });
+    }
+    logError("booking.walkin_guests_failed", guestsError, {
+      bookingId: inserted.id,
+      guest_count,
+    });
+    return { success: false, error: "Couldn't create guest QR codes." };
+  }
+
   await logAuditEvent("booking.walkin_created", {
     actorUserId: userId,
     metadata: {
@@ -519,6 +617,7 @@ export async function createWalkinBooking(
       booking_date,
       start_hour,
       end_hour,
+      guest_count,
     },
   });
 
@@ -526,4 +625,164 @@ export async function createWalkinBooking(
   revalidatePath("/admin/schedule");
   revalidatePath("/booking");
   return { success: true, bookingId: inserted.id };
+}
+
+// ============================================================================
+// EDIT GUEST COUNT (admin; any non-terminal state)
+// ============================================================================
+// Admin can add or remove seats at any time. Redeemed guests can never be
+// removed — dropping a guest that already walked through the gate would
+// rewrite history. The action adjusts the QR list to match the new count:
+// add rows at the tail (highest guest_number) when increasing, drop the
+// tail rows when decreasing.
+export async function editBookingGuestCount(
+  bookingId: string,
+  values: EditGuestCountValues,
+): Promise<ActionResult> {
+  const parsed = editGuestCountSchema.safeParse(values);
+  if (!parsed.success) {
+    return { success: false, error: parsed.error.issues[0].message };
+  }
+  const { guest_count: next } = parsed.data;
+
+  const auth = await requireAdmin();
+  if (!auth.ok) return { success: false, error: auth.error };
+  const { supabase, userId } = auth;
+
+  const booking = await getBookingForGuestEdit(bookingId);
+  if (!booking) return { success: false, error: "Booking not found." };
+  if (booking.status === "cancelled" || booking.status === "completed") {
+    return {
+      success: false,
+      error: `Booking is ${booking.status}; guest count is locked.`,
+    };
+  }
+
+  const previous = booking.guest_count;
+  if (next === previous) {
+    return { success: true };
+  }
+
+  // Load court + settings to recompute total_amount.
+  const [court, settings] = await Promise.all([
+    getCourt(booking.court_id),
+    getFacilitySettings(),
+  ]);
+  if (!court) return { success: false, error: "Court not found." };
+
+  const hours = booking.end_hour - booking.start_hour;
+  const total_amount =
+    Number(court.hourly_rate) * hours +
+    Number(settings.entrance_pass_price_per_guest) * next;
+
+  // For confirmed bookings with existing QRs, reconcile the guest rows so
+  // the issued codes line up with the new count. Pending bookings have no
+  // guest rows yet (QRs are generated at approval), so this branch is a
+  // no-op for them.
+  const existing = await listBookingGuestsForBooking(bookingId);
+  if (existing.length > 0) {
+    if (next > existing.length) {
+      const { error: insertError } = await supabase
+        .from("booking_guests")
+        .insert(
+          buildGuestRows(
+            bookingId,
+            existing.length + 1,
+            next - existing.length,
+          ),
+        );
+      if (insertError) {
+        logError("booking.guest_count_insert_failed", insertError, {
+          bookingId,
+        });
+        return { success: false, error: "Couldn't add new guest QR codes." };
+      }
+    } else if (next < existing.length) {
+      // Drop from the tail; refuse if the guests being removed have already
+      // been redeemed (preserves the gate-entry audit trail).
+      const toRemove = existing.filter((g) => g.guest_number > next);
+      const redeemedInRemoval = toRemove.filter((g) => g.redeemed_at);
+      if (redeemedInRemoval.length > 0) {
+        return {
+          success: false,
+          error: `Can't reduce below ${Math.min(...redeemedInRemoval.map((g) => g.guest_number))} — that guest has already been redeemed.`,
+        };
+      }
+      const { error: deleteError } = await supabase
+        .from("booking_guests")
+        .delete()
+        .in(
+          "id",
+          toRemove.map((g) => g.id),
+        );
+      if (deleteError) {
+        logError("booking.guest_count_delete_failed", deleteError, {
+          bookingId,
+        });
+        return { success: false, error: "Couldn't remove guest QR codes." };
+      }
+    }
+  }
+
+  const { error: updateError } = await supabase
+    .from("bookings")
+    .update({ guest_count: next, total_amount })
+    .eq("id", bookingId);
+  if (updateError) {
+    logError("booking.guest_count_update_failed", updateError, { bookingId });
+    return { success: false, error: "Couldn't update guest count." };
+  }
+
+  await logAuditEvent("booking.guest_count_changed", {
+    actorUserId: userId,
+    metadata: {
+      booking_id: bookingId,
+      from: previous,
+      to: next,
+    },
+  });
+
+  revalidateBookingRoutes(bookingId);
+  return { success: true };
+}
+
+// ============================================================================
+// MANUAL REDEEM (admin marks a single guest redeemed from the detail page)
+// ============================================================================
+export async function manualRedeemBookingGuest(
+  guestId: string,
+): Promise<ActionResult> {
+  const auth = await requireAdmin();
+  if (!auth.ok) return { success: false, error: auth.error };
+  const { supabase, userId } = auth;
+
+  const guest = await getBookingGuestForRedeem(guestId);
+  if (!guest) return { success: false, error: "Guest not found." };
+  if (guest.redeemed_at) {
+    return { success: false, error: "Guest is already redeemed." };
+  }
+
+  const { error: updateError } = await supabase
+    .from("booking_guests")
+    .update({
+      redeemed_at: new Date().toISOString(),
+      redeemed_by: userId,
+    })
+    .eq("id", guestId);
+  if (updateError) {
+    logError("booking.guest_redeem_failed", updateError, { guestId });
+    return { success: false, error: "Couldn't mark guest redeemed." };
+  }
+
+  await logAuditEvent("booking.guest_redeemed", {
+    actorUserId: userId,
+    metadata: {
+      booking_id: guest.booking_id,
+      guest_id: guestId,
+      manual: true,
+    },
+  });
+
+  revalidateBookingRoutes(guest.booking_id);
+  return { success: true };
 }
