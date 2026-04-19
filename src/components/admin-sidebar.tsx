@@ -7,6 +7,7 @@ import {
   ClipboardList,
   Cog,
   CreditCard,
+  DoorOpen,
   FileText,
   Inbox,
   LayoutGrid,
@@ -15,7 +16,6 @@ import {
   QrCode,
   ScanLine,
   ShieldBan,
-  Ticket,
   Users,
 } from "lucide-react";
 
@@ -33,7 +33,7 @@ type NavItem = {
 const NAV_ITEMS: NavItem[] = [
   { href: "/admin/schedule", label: "Schedule", icon: CalendarDays },
   { href: "/admin/bookings", label: "Bookings", icon: ClipboardList },
-  { href: "/admin/passes", label: "Entrance Passes", icon: Ticket },
+  { href: "/admin/entries", label: "Walk-in Entries", icon: DoorOpen },
   { href: "/admin/scan", label: "QR Scanner", icon: ScanLine },
   { href: "/admin/users", label: "Users", icon: Users },
   { href: "/admin/courts", label: "Courts", icon: LayoutGrid },
