@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Plus, Trash2 } from "lucide-react";
@@ -71,7 +70,6 @@ export function BlockedSlotsView({
   } | null>(null);
   const [deletePending, startDeleteTransition] = useTransition();
   const [bulkPending, startBulkTransition] = useTransition();
-  const router = useRouter();
 
   const today = todayInFacility();
 
@@ -126,7 +124,7 @@ export function BlockedSlotsView({
       if (result.success) {
         toast.success("Slot unblocked");
         setDeleting(null);
-        router.refresh();
+        // revalidatePath() in the server action refreshes this page.
       } else {
         toast.error(result.error ?? "Failed to unblock slot.");
       }
@@ -153,7 +151,6 @@ export function BlockedSlotsView({
       }
       ctx.clear();
       setBulkConfirm(null);
-      router.refresh();
     });
   }
 
@@ -229,7 +226,6 @@ export function BlockedSlotsView({
           operatingEnd={operatingEnd}
           today={today}
           onClose={() => setAddOpen(false)}
-          onSaved={() => router.refresh()}
         />
       ) : null}
 
@@ -334,14 +330,12 @@ function AddBlockedSlotDialog({
   operatingEnd,
   today,
   onClose,
-  onSaved,
 }: {
   courts: CourtOption[];
   operatingStart: number;
   operatingEnd: number;
   today: string;
   onClose: () => void;
-  onSaved: () => void;
 }) {
   const [pending, startTransition] = useTransition();
 
@@ -368,7 +362,6 @@ function AddBlockedSlotDialog({
       const result = await createBlockedSlot(values);
       if (result.success) {
         toast.success("Slot blocked");
-        onSaved();
         onClose();
       } else {
         toast.error(result.error ?? "Failed to block slot.");

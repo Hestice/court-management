@@ -2,8 +2,14 @@
 
 import { revalidatePath } from "next/cache";
 
+import { logAuditEvent } from "@/lib/audit";
+import {
+  checkPreset,
+  formatRetryAfter,
+} from "@/lib/rate-limit";
 import { createClient } from "@/lib/supabase/server";
 import { formatHour, todayInFacility } from "@/lib/timezone";
+import { addDaysIso, BOOKING_DATE_MAX_DAYS } from "@/lib/zod-helpers";
 import { createBookingSchema, type CreateBookingValues } from "./schema";
 
 export type CreateBookingResult =
@@ -34,8 +40,27 @@ export async function createBooking(
     return { success: false, error: "Not authenticated." };
   }
 
-  if (booking_date < todayInFacility()) {
+  const rate = await checkPreset("bookingSubmit", user.id);
+  if (!rate.allowed) {
+    await logAuditEvent("rate_limit.hit", {
+      actorUserId: user.id,
+      metadata: { preset: "bookingSubmit" },
+    });
+    return {
+      success: false,
+      error: `You've hit the booking rate limit. ${formatRetryAfter(rate.retryAfterSeconds)}`,
+    };
+  }
+
+  const today = todayInFacility();
+  if (booking_date < today) {
     return { success: false, error: "Date must be today or later." };
+  }
+  if (booking_date > addDaysIso(today, BOOKING_DATE_MAX_DAYS)) {
+    return {
+      success: false,
+      error: `Bookings can't be more than ${BOOKING_DATE_MAX_DAYS} days out.`,
+    };
   }
 
   // Parallel fetch: court + settings. Validation is server-authoritative;
