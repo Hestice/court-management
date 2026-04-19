@@ -391,6 +391,82 @@ export async function cancelBooking(
 }
 
 // ============================================================================
+// RESTORE (undo an accidental cancel)
+// ============================================================================
+// Returns the booking to its prior state. We infer that state from whether
+// booking_guests rows exist: if they do, the booking had already been
+// confirmed (QRs were issued at approval or walk-in creation), so restore to
+// 'confirmed'. Otherwise restore to 'pending' with a fresh expires_at — the
+// receipt was deleted on cancel, so the customer has to re-upload before an
+// admin can approve.
+//
+// The bookings_no_overlap EXCLUDE constraint can fire here if another booking
+// has since claimed the slot; surface that as slotTaken so the UI can prompt
+// the admin to pick a new time (via reschedule) instead.
+export async function restoreBooking(
+  bookingId: string,
+): Promise<ActionResult> {
+  const auth = await requireAdmin();
+  if (!auth.ok) return { success: false, error: auth.error };
+  const { supabase, userId } = auth;
+
+  const booking = await getBookingForCancel(bookingId);
+  if (!booking) return { success: false, error: "Booking not found." };
+  if (booking.status !== "cancelled") {
+    return {
+      success: false,
+      error: `Only cancelled bookings can be restored. This one is ${booking.status}.`,
+    };
+  }
+
+  const guests = await listBookingGuestsForBooking(bookingId);
+  const targetStatus: "pending" | "confirmed" =
+    guests.length > 0 ? "confirmed" : "pending";
+
+  const settings = await getFacilitySettings();
+  const expires_at =
+    targetStatus === "pending"
+      ? new Date(
+          Date.now() + settings.pending_expiry_hours * 60 * 60 * 1000,
+        ).toISOString()
+      : null;
+
+  const note = appendNote(
+    booking.admin_notes,
+    `Restored from cancelled to ${targetStatus}`,
+  );
+
+  const { error: updateError } = await supabase
+    .from("bookings")
+    .update({
+      status: targetStatus,
+      expires_at,
+      admin_notes: note,
+    })
+    .eq("id", bookingId);
+  if (updateError) {
+    if (updateError.code === EXCLUSION_VIOLATION) {
+      return {
+        success: false,
+        slotTaken: true,
+        error:
+          "Another booking has claimed that slot. Reschedule to a different time before restoring.",
+      };
+    }
+    logError("booking.restore_failed", updateError, { bookingId });
+    return { success: false, error: "Couldn't restore booking." };
+  }
+
+  await logAuditEvent("booking.restored", {
+    actorUserId: userId,
+    metadata: { booking_id: bookingId, restored_to: targetStatus },
+  });
+
+  revalidateBookingRoutes(bookingId);
+  return { success: true };
+}
+
+// ============================================================================
 // MARK COMPLETED (confirmed + past-date → completed)
 // ============================================================================
 export async function completeBooking(

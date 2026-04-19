@@ -7,6 +7,7 @@ import {
   CalendarClock,
   CheckCircle2,
   ChevronLeft,
+  RotateCcw,
   XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -45,6 +46,7 @@ import {
   manualRedeemBookingGuest,
   rejectBooking,
   rescheduleBooking,
+  restoreBooking,
   saveBookingNotes,
 } from "../actions";
 import type { BookingRow, BookingStatus } from "../schema";
@@ -132,6 +134,7 @@ export function BookingDetailView({
   const [approveOpen, setApproveOpen] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
+  const [restoreOpen, setRestoreOpen] = useState(false);
   const [completeOpen, setCompleteOpen] = useState(false);
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [receiptOpen, setReceiptOpen] = useState(false);
@@ -139,6 +142,11 @@ export function BookingDetailView({
 
   const canEditGuests =
     booking.status === "pending" || booking.status === "confirmed";
+  const canRestore = booking.status === "cancelled";
+  // If the cancelled booking already has QR rows, it was previously confirmed;
+  // otherwise it was pending. Mirrors the inference in the server action.
+  const restoreTarget: "pending" | "confirmed" =
+    guests.length > 0 ? "confirmed" : "pending";
 
   const canApprove =
     booking.status === "pending" && !!booking.payment_receipt_url;
@@ -219,6 +227,12 @@ export function BookingDetailView({
             Mark as completed
           </Button>
         ) : null}
+        {canRestore ? (
+          <Button variant="outline" onClick={() => setRestoreOpen(true)}>
+            <RotateCcw className="h-4 w-4" aria-hidden />
+            Restore
+          </Button>
+        ) : null}
       </section>
 
       <GuestListSection
@@ -259,6 +273,13 @@ export function BookingDetailView({
         open={completeOpen}
         onOpenChange={setCompleteOpen}
         bookingId={booking.id}
+        onDone={onActionDone}
+      />
+      <RestoreDialog
+        open={restoreOpen}
+        onOpenChange={setRestoreOpen}
+        bookingId={booking.id}
+        target={restoreTarget}
         onDone={onActionDone}
       />
       {rescheduleOpen ? (
@@ -726,6 +747,64 @@ function CompleteDialog({
   );
 }
 
+function RestoreDialog({
+  open,
+  onOpenChange,
+  bookingId,
+  target,
+  onDone,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  bookingId: string;
+  target: "pending" | "confirmed";
+  onDone: () => void;
+}) {
+  const [pending, startTransition] = useTransition();
+  function onConfirm() {
+    startTransition(async () => {
+      const res = await restoreBooking(bookingId);
+      if (res.success) {
+        toast.success("Booking restored");
+        onOpenChange(false);
+        onDone();
+      } else {
+        toast.error(res.error);
+      }
+    });
+  }
+  const description =
+    target === "confirmed"
+      ? "This booking was previously confirmed (QR codes were already issued), so restoring puts it back to confirmed. The original receipt is gone — there's no admin approval to redo."
+      : "This booking was pending when cancelled, so it goes back to pending with a fresh expiry window. The customer will need to re-upload their receipt.";
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && !pending && onOpenChange(o)}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Restore this booking?</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button
+            variant="ghost"
+            onClick={() => onOpenChange(false)}
+            disabled={pending}
+          >
+            Cancel
+          </Button>
+          <Button onClick={onConfirm} disabled={pending}>
+            {pending
+              ? "Restoring…"
+              : target === "confirmed"
+                ? "Restore as confirmed"
+                : "Restore as pending"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function AdminNotes({
   bookingId,
   initial,
@@ -876,6 +955,12 @@ function describeActivity(entry: ActivityEntry): string {
       return "Booking rescheduled";
     case "booking.cancelled":
       return "Booking cancelled";
+    case "booking.restored": {
+      const to = entry.metadata?.restored_to;
+      return typeof to === "string"
+        ? `Booking restored to ${to}`
+        : "Booking restored";
+    }
     case "booking.completed":
       return "Booking marked completed";
     case "booking.note_updated":
