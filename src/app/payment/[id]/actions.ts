@@ -2,7 +2,9 @@
 
 import { revalidatePath } from "next/cache";
 
+import { requireUser } from "@/lib/actions";
 import { logAuditEvent } from "@/lib/audit";
+import { getBookingForOwnership } from "@/lib/data/bookings";
 import {
   convertToWebp,
   RECEIPT_CONVERT_DEFAULTS,
@@ -15,7 +17,6 @@ import {
 import { logError } from "@/lib/logger";
 import { checkPreset, formatRetryAfter } from "@/lib/rate-limit";
 import { createReceiptSignedUrl, RECEIPT_BUCKET } from "@/lib/receipt";
-import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 
 export type UploadReceiptResult =
@@ -34,14 +35,11 @@ export async function uploadReceipt(
   bookingId: string,
   formData: FormData,
 ): Promise<UploadReceiptResult> {
-  const supabase = await createClient();
+  const auth = await requireUser();
+  if (!auth.ok) return { success: false, error: auth.error };
+  const { userId } = auth;
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { success: false, error: "Not authenticated." };
-
-  const rate = await checkPreset("fileUpload", user.id);
+  const rate = await checkPreset("fileUpload", userId);
   if (!rate.allowed) {
     return {
       success: false,
@@ -53,14 +51,9 @@ export async function uploadReceipt(
   // but are not intended to upload on behalf of customers — enforcing "owner
   // only" for uploads keeps the audit trail clean (the receipt always came
   // from the customer's own session).
-  const { data: booking, error: bookingError } = await supabase
-    .from("bookings")
-    .select("id, user_id, status, payment_receipt_url")
-    .eq("id", bookingId)
-    .maybeSingle();
-  if (bookingError) return { success: false, error: bookingError.message };
+  const booking = await getBookingForOwnership(bookingId);
   if (!booking) return { success: false, error: "Booking not found." };
-  if (booking.user_id !== user.id) {
+  if (booking.user_id !== userId) {
     return { success: false, error: "You can only upload for your own booking." };
   }
   if (booking.status !== "pending") {
@@ -115,10 +108,10 @@ export async function uploadReceipt(
   // Fixed path — same filename for every upload for this booking — so a new
   // upload overwrites the prior receipt without leaving orphans. Ownership is
   // encoded in the first path segment for bookkeeping, and enforced above via
-  // the explicit booking.user_id === user.id check. We use the service client
+  // the explicit booking.user_id === userId check. We use the service client
   // for the actual write because Supabase Storage's RLS evaluation is unstable
   // under its own connection pool (cached plans reject valid writes).
-  const path = `${user.id}/${bookingId}/${RECEIPT_FILENAME}`;
+  const path = `${userId}/${bookingId}/${RECEIPT_FILENAME}`;
 
   const service = createServiceClient();
   const { error: uploadError } = await service.storage
@@ -148,7 +141,7 @@ export async function uploadReceipt(
     .maybeSingle();
   if (updateError) {
     logError("payment.receipt_persist_failed", updateError, { bookingId });
-    return { success: false, error: updateError.message };
+    return { success: false, error: "Couldn't save receipt reference." };
   }
   if (!updated) {
     logError(
@@ -160,7 +153,7 @@ export async function uploadReceipt(
   }
 
   await logAuditEvent("booking.receipt_uploaded", {
-    actorUserId: user.id,
+    actorUserId: userId,
     metadata: { booking_id: bookingId },
   });
 

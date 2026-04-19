@@ -1,31 +1,21 @@
-import { createClient } from "@/lib/supabase/server";
+import { getFacilitySettings } from "@/lib/data/facility-settings";
+
 import { SettingsForm } from "./settings-form";
 import type { FacilitySettingsValues } from "./schema";
 
 export const metadata = { title: "Settings — Admin" };
 
 export default async function AdminSettingsPage() {
-  const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("facility_settings")
-    .select(
-      "facility_name, operating_hours_start, operating_hours_end, contact_email, contact_phone, pending_expiry_hours, max_booking_duration_hours",
-    )
-    .eq("id", 1)
-    .maybeSingle();
-
-  if (error) {
-    throw new Error(`Failed to load facility settings: ${error.message}`);
-  }
+  const settings = await getFacilitySettings();
 
   const defaults: FacilitySettingsValues = {
-    facility_name: data?.facility_name ?? "Court Management",
-    operating_hours_start: data?.operating_hours_start ?? 8,
-    operating_hours_end: data?.operating_hours_end ?? 22,
-    contact_email: data?.contact_email ?? "",
-    contact_phone: data?.contact_phone ?? "",
-    pending_expiry_hours: data?.pending_expiry_hours ?? 24,
-    max_booking_duration_hours: data?.max_booking_duration_hours ?? 5,
+    facility_name: settings.facility_name,
+    operating_hours_start: settings.operating_hours_start,
+    operating_hours_end: settings.operating_hours_end,
+    contact_email: settings.contact_email ?? "",
+    contact_phone: settings.contact_phone ?? "",
+    pending_expiry_hours: settings.pending_expiry_hours,
+    max_booking_duration_hours: settings.max_booking_duration_hours,
   };
 
   return (

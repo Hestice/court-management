@@ -1,23 +1,14 @@
 import { notFound, redirect } from "next/navigation";
 
+import { getBookingForCustomer } from "@/lib/data/bookings";
+import { listActivePaymentMethods } from "@/lib/data/payment-methods";
+import { isUserAdmin } from "@/lib/data/users";
 import { createReceiptSignedUrl } from "@/lib/receipt";
 import { createClient } from "@/lib/supabase/server";
 
-import { PaymentView, type PaymentMethodForCustomer } from "./payment-view";
+import { PaymentView } from "./payment-view";
 
 export const metadata = { title: "Payment Instructions" };
-
-type BookingWithCourt = {
-  id: string;
-  user_id: string | null;
-  booking_date: string;
-  start_hour: number;
-  end_hour: number;
-  status: string;
-  total_amount: number;
-  payment_receipt_url: string | null;
-  court: { name: string } | null;
-};
 
 // Entry point for the /payment/[id] landing page. For now only bookings are
 // supported; when entrance-pass support lands the loader will branch on the
@@ -35,52 +26,17 @@ export default async function PaymentPage({
   } = await supabase.auth.getUser();
   if (!user) redirect(`/login?next=/payment/${id}`);
 
-  const [{ data: bookingRaw, error: bookingError }, { data: profile }] =
-    await Promise.all([
-      supabase
-        .from("bookings")
-        .select(
-          "id, user_id, booking_date, start_hour, end_hour, status, total_amount, payment_receipt_url, court:courts!bookings_court_id_fkey(name)",
-        )
-        .eq("id", id)
-        .maybeSingle(),
-      supabase.from("users").select("role").eq("id", user.id).maybeSingle(),
-    ]);
-
-  if (bookingError) {
-    throw new Error(`Failed to load booking: ${bookingError.message}`);
-  }
-
-  const booking = bookingRaw as unknown as BookingWithCourt | null;
-  const isAdmin = profile?.role === "admin";
+  const [booking, viewerIsAdmin, methods] = await Promise.all([
+    getBookingForCustomer(id),
+    isUserAdmin(user.id),
+    listActivePaymentMethods(),
+  ]);
 
   // Unknown booking or a booking owned by someone else (and the caller isn't
   // an admin): treat as not found. Intentionally indistinguishable so a
   // customer can't probe other users' booking IDs.
   if (!booking) notFound();
-  if (booking.user_id !== user.id && !isAdmin) notFound();
-
-  // Only active methods, ordered the way admin set. RLS also enforces this
-  // for non-admin reads, but filtering here keeps the query explicit.
-  const { data: methodsRaw, error: methodsError } = await supabase
-    .from("payment_methods")
-    .select("id, label, account_details, qr_image_url, display_order")
-    .eq("is_active", true)
-    .order("display_order", { ascending: true })
-    .order("created_at", { ascending: true });
-  if (methodsError) {
-    throw new Error(`Failed to load payment methods: ${methodsError.message}`);
-  }
-
-  const methods: PaymentMethodForCustomer[] = (methodsRaw ?? []).map((m) => ({
-    id: m.id,
-    label: m.label,
-    account_details: m.account_details,
-    qr_public_url: m.qr_image_url
-      ? supabase.storage.from("payment-qrs").getPublicUrl(m.qr_image_url).data
-          .publicUrl
-      : null,
-  }));
+  if (booking.user_id !== user.id && !viewerIsAdmin) notFound();
 
   // Sign the current receipt (if any) so the view can render a preview right
   // away. Signed URLs expire — the client re-signs via a server action if the
@@ -108,7 +64,7 @@ export default async function PaymentPage({
         }}
         methods={methods}
         initialReceipt={initialReceipt}
-        isAdminViewer={isAdmin && booking.user_id !== user.id}
+        isAdminViewer={viewerIsAdmin && booking.user_id !== user.id}
       />
     </main>
   );

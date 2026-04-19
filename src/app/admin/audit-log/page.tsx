@@ -1,41 +1,17 @@
-import { createClient } from "@/lib/supabase/server";
+import { listAuditLogs } from "@/lib/data/audit-logs";
 
 import { AuditLogView, type AuditLogRow } from "./audit-log-view";
 
 export const metadata = { title: "Audit Log — Admin" };
 
-type AuditLogWithActor = {
-  id: string;
-  actor_user_id: string | null;
-  action: string;
-  metadata: unknown;
-  ip_address: string | null;
-  created_at: string;
-  actor: { name: string | null; email: string } | null;
-};
-
 const PAGE_LIMIT = 500;
 
 export default async function AdminAuditLogPage() {
-  const supabase = await createClient();
-
   // Fetch the most recent N entries. The table is admin-SELECT-only via RLS;
   // non-admin requests return zero rows here (the middleware also blocks).
-  const { data, error } = await supabase
-    .from("audit_logs")
-    .select(
-      "id, actor_user_id, action, metadata, ip_address, created_at, actor:users!audit_logs_actor_user_id_fkey(name, email)",
-    )
-    .order("created_at", { ascending: false })
-    .limit(PAGE_LIMIT);
+  const rowsRaw = await listAuditLogs({ limit: PAGE_LIMIT });
 
-  if (error) {
-    throw new Error(`Failed to load audit log: ${error.message}`);
-  }
-
-  const rows: AuditLogRow[] = (
-    (data ?? []) as unknown as AuditLogWithActor[]
-  ).map((r) => ({
+  const rows: AuditLogRow[] = rowsRaw.map((r) => ({
     id: r.id,
     action: r.action,
     actor_name:

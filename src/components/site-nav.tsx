@@ -1,5 +1,8 @@
 import Link from "next/link";
+
+import { getUserProfile } from "@/lib/data/users";
 import { createClient } from "@/lib/supabase/server";
+
 import { SiteNavClient } from "./site-nav-client";
 import { Button } from "./ui/button";
 import { logout } from "@/app/(auth)/actions";
@@ -13,11 +16,7 @@ export async function SiteNav() {
   let displayName: string | null = null;
   let role: string | null = null;
   if (user) {
-    const { data: profile } = await supabase
-      .from("users")
-      .select("name, email, role")
-      .eq("id", user.id)
-      .maybeSingle();
+    const profile = await getUserProfile(user.id);
     displayName = profile?.name?.trim() || profile?.email || user.email || null;
     role = profile?.role ?? null;
   }

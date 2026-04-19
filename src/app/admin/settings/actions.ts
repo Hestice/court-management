@@ -1,14 +1,16 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, updateTag } from "next/cache";
 
-import { createClient } from "@/lib/supabase/server";
+import { requireAdmin } from "@/lib/actions";
+import { FACILITY_SETTINGS_TAG } from "@/lib/data/facility-settings";
+import { logError } from "@/lib/logger";
 import {
   facilitySettingsSchema,
   type FacilitySettingsValues,
 } from "./schema";
 
-export type ActionResult = { success: boolean; error?: string };
+export type ActionResult = { success: true } | { success: false; error: string };
 
 export async function updateFacilitySettings(
   values: FacilitySettingsValues,
@@ -18,7 +20,10 @@ export async function updateFacilitySettings(
     return { success: false, error: parsed.error.issues[0].message };
   }
 
-  const supabase = await createClient();
+  const auth = await requireAdmin();
+  if (!auth.ok) return { success: false, error: auth.error };
+  const { supabase } = auth;
+
   const { error } = await supabase
     .from("facility_settings")
     .update({
@@ -34,9 +39,15 @@ export async function updateFacilitySettings(
     .eq("id", 1);
 
   if (error) {
-    return { success: false, error: error.message };
+    logError("facility_settings.update_failed", error);
+    return { success: false, error: "Couldn't save settings." };
   }
 
+  // Settings feed every page that renders operating hours / max duration —
+  // updateTag immediately expires the unstable_cache layer (read-your-own-
+  // writes: admin sees their change on next load), and revalidatePath drops
+  // the admin form's cached render.
+  updateTag(FACILITY_SETTINGS_TAG);
   revalidatePath("/admin/settings");
   return { success: true };
 }

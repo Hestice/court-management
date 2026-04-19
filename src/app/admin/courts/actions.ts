@@ -2,7 +2,13 @@
 
 import { revalidatePath } from "next/cache";
 
-import { createClient } from "@/lib/supabase/server";
+import { requireAdmin } from "@/lib/actions";
+import {
+  getLatestCourtHourlyRate,
+  listCourtPositions,
+  mapCourtNames,
+} from "@/lib/data/courts";
+import { logError } from "@/lib/logger";
 import {
   courtFormSchema,
   createCourtsSchema,
@@ -14,7 +20,7 @@ import {
   type CreateCourtsValues,
 } from "./schema";
 
-export type ActionResult = { success: boolean; error?: string };
+export type ActionResult = { success: true } | { success: false; error: string };
 
 type PositionRow = { position_x: number | null; position_y: number | null };
 
@@ -52,15 +58,10 @@ function nextFreePositions(
   return picks;
 }
 
+// Re-exported through the action entrypoint so the client form can prefill
+// the "hourly rate" field with the most recently-created court's rate.
 export async function getLatestCourtRate(): Promise<number> {
-  const supabase = await createClient();
-  const { data } = await supabase
-    .from("courts")
-    .select("hourly_rate")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  return data?.hourly_rate ?? 0;
+  return getLatestCourtHourlyRate();
 }
 
 export async function createCourts(
@@ -71,19 +72,14 @@ export async function createCourts(
     return { success: false, error: parsed.error.issues[0].message };
   }
 
-  const supabase = await createClient();
+  const auth = await requireAdmin();
+  if (!auth.ok) return { success: false, error: auth.error };
+  const { supabase } = auth;
 
-  const { data: existing, error: listError } = await supabase
-    .from("courts")
-    .select("name, position_x, position_y");
-  if (listError) {
-    return { success: false, error: listError.message };
-  }
-
-  const startNumber =
-    highestCourtNumber((existing ?? []).map((c) => c.name)) + 1;
+  const existing = await listCourtPositions();
+  const startNumber = highestCourtNumber(existing.map((c) => c.name)) + 1;
   const positions = nextFreePositions(
-    takenPositionSet(existing ?? []),
+    takenPositionSet(existing),
     parsed.data.quantity,
   );
 
@@ -98,10 +94,12 @@ export async function createCourts(
   const { error } = await supabase.from("courts").insert(rows);
 
   if (error) {
-    return { success: false, error: error.message };
+    logError("courts.create_failed", error, { quantity: parsed.data.quantity });
+    return { success: false, error: "Couldn't create courts." };
   }
 
   revalidatePath("/admin/courts");
+  revalidatePath("/admin/floor-plan");
   return { success: true };
 }
 
@@ -114,7 +112,10 @@ export async function updateCourt(
     return { success: false, error: parsed.error.issues[0].message };
   }
 
-  const supabase = await createClient();
+  const auth = await requireAdmin();
+  if (!auth.ok) return { success: false, error: auth.error };
+  const { supabase } = auth;
+
   const { error } = await supabase
     .from("courts")
     .update({
@@ -125,10 +126,12 @@ export async function updateCourt(
     .eq("id", id);
 
   if (error) {
-    return { success: false, error: error.message };
+    logError("courts.update_failed", error, { id });
+    return { success: false, error: "Couldn't update court." };
   }
 
   revalidatePath("/admin/courts");
+  revalidatePath("/admin/floor-plan");
   return { success: true };
 }
 
@@ -136,20 +139,27 @@ export async function deleteCourt(
   id: string,
   name: string,
 ): Promise<ActionResult> {
-  const supabase = await createClient();
+  const auth = await requireAdmin();
+  if (!auth.ok) return { success: false, error: auth.error };
+  const { supabase } = auth;
+
   const { error } = await supabase.from("courts").delete().eq("id", id);
 
   if (error) {
+    // 23503 = foreign_key_violation — this court has bookings referencing it.
+    // Surface a friendly actionable message instead of the raw constraint text.
     if (error.code === "23503") {
       return {
         success: false,
         error: `Cannot delete ${name} — it has existing bookings. Toggle it inactive instead to hide it from customers.`,
       };
     }
-    return { success: false, error: error.message };
+    logError("courts.delete_failed", error, { id });
+    return { success: false, error: "Couldn't delete court." };
   }
 
   revalidatePath("/admin/courts");
+  revalidatePath("/admin/floor-plan");
   return { success: true };
 }
 
@@ -161,15 +171,11 @@ export type BulkDeleteResult = {
 export async function deleteCourts(ids: string[]): Promise<BulkDeleteResult> {
   if (ids.length === 0) return { deletedCount: 0, failedNames: [] };
 
-  const supabase = await createClient();
+  const auth = await requireAdmin();
+  if (!auth.ok) return { deletedCount: 0, failedNames: [] };
+  const { supabase } = auth;
 
-  const { data: rows } = await supabase
-    .from("courts")
-    .select("id, name")
-    .in("id", ids);
-  const nameById = new Map<string, string>(
-    (rows ?? []).map((r) => [r.id, r.name]),
-  );
+  const nameById = await mapCourtNames(ids);
 
   let deletedCount = 0;
   const failedNames: string[] = [];
@@ -184,5 +190,6 @@ export async function deleteCourts(ids: string[]): Promise<BulkDeleteResult> {
   }
 
   revalidatePath("/admin/courts");
+  revalidatePath("/admin/floor-plan");
   return { deletedCount, failedNames };
 }

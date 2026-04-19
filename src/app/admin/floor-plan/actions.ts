@@ -2,7 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 
-import { createClient } from "@/lib/supabase/server";
+import { requireAdmin } from "@/lib/actions";
+import { logError } from "@/lib/logger";
 
 export type CourtPosition = {
   id: string;
@@ -10,14 +11,16 @@ export type CourtPosition = {
   position_y: number | null;
 };
 
-export type SaveLayoutResult = { success: boolean; error?: string };
+export type SaveLayoutResult = { success: true } | { success: false; error: string };
 
 export async function saveLayout(
   positions: CourtPosition[],
 ): Promise<SaveLayoutResult> {
   if (positions.length === 0) return { success: true };
 
-  const supabase = await createClient();
+  const auth = await requireAdmin();
+  if (!auth.ok) return { success: false, error: auth.error };
+  const { supabase } = auth;
 
   // Issue updates in parallel; RLS gates on admin role so unauthorised
   // callers get a consistent error regardless of row count.
@@ -32,7 +35,10 @@ export async function saveLayout(
 
   const firstError = results.find((r) => r.error)?.error;
   if (firstError) {
-    return { success: false, error: firstError.message };
+    logError("courts.layout_save_failed", firstError, {
+      count: positions.length,
+    });
+    return { success: false, error: "Couldn't save layout." };
   }
 
   revalidatePath("/admin/floor-plan");
