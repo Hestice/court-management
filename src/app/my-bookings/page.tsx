@@ -4,6 +4,7 @@ import {
   listBookingGuestsForBooking,
   listBookingsForUser,
 } from "@/lib/data/bookings";
+import { getFacilitySettings } from "@/lib/data/facility-settings";
 import { createClient } from "@/lib/supabase/server";
 import { todayInFacility } from "@/lib/timezone";
 
@@ -20,7 +21,10 @@ export default async function MyBookingsPage() {
   // where middleware didn't run.
   if (!user) redirect("/login?next=/my-bookings");
 
-  const bookings = await listBookingsForUser(user.id);
+  const [bookings, settings] = await Promise.all([
+    listBookingsForUser(user.id),
+    getFacilitySettings(),
+  ]);
 
   // Only fetch guest QR rows for confirmed bookings — those are the only ones
   // where QRs render in the UI. Keeps the per-row trip count bounded.
@@ -56,7 +60,11 @@ export default async function MyBookingsPage() {
 
   return (
     <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-6 py-8">
-      <MyBookingsView rows={rows} today={todayInFacility()} />
+      <MyBookingsView
+        rows={rows}
+        today={todayInFacility()}
+        facilityName={settings.facility_name}
+      />
     </main>
   );
 }

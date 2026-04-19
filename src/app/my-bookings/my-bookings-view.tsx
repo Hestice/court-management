@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { QRCodeSVG } from "qrcode.react";
+import { QRCodeCanvas } from "qrcode.react";
+import { Download } from "lucide-react";
+import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -95,9 +97,11 @@ function formatRedeemedAt(iso: string): string {
 export function MyBookingsView({
   rows,
   today,
+  facilityName,
 }: {
   rows: MyBookingRow[];
   today: string;
+  facilityName: string;
 }) {
   const [filter, setFilter] = useState<Filter>("upcoming");
 
@@ -159,7 +163,7 @@ export function MyBookingsView({
       ) : (
         <ul className="flex flex-col gap-4">
           {visible.map((r) => (
-            <BookingCard key={r.id} row={r} />
+            <BookingCard key={r.id} row={r} facilityName={facilityName} />
           ))}
         </ul>
       )}
@@ -167,7 +171,13 @@ export function MyBookingsView({
   );
 }
 
-function BookingCard({ row }: { row: MyBookingRow }) {
+function BookingCard({
+  row,
+  facilityName,
+}: {
+  row: MyBookingRow;
+  facilityName: string;
+}) {
   return (
     <li className="flex flex-col gap-4 rounded-lg border border-border bg-background p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -219,6 +229,8 @@ function BookingCard({ row }: { row: MyBookingRow }) {
                 key={g.id}
                 guest={g}
                 total={row.guest_count}
+                booking={row}
+                facilityName={facilityName}
               />
             ))}
           </ul>
@@ -231,11 +243,57 @@ function BookingCard({ row }: { row: MyBookingRow }) {
 function GuestQr({
   guest,
   total,
+  booking,
+  facilityName,
 }: {
   guest: MyBookingGuest;
   total: number;
+  booking: MyBookingRow;
+  facilityName: string;
 }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [downloading, setDownloading] = useState(false);
   const redeemed = !!guest.redeemed_at;
+
+  async function onDownload() {
+    const src = canvasRef.current;
+    if (!src) return;
+    setDownloading(true);
+    try {
+      const blob = await renderPassPng({
+        qrCanvas: src,
+        facilityName,
+        guest,
+        total,
+        courtName: booking.court_name,
+        date: booking.booking_date,
+        startHour: booking.start_hour,
+        endHour: booking.end_hour,
+      });
+      if (!blob) {
+        toast.error("Couldn't render the pass image.");
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const slug = `${booking.court_name}-${booking.booking_date}`
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      a.download = `pass-${slug}-guest-${guest.guest_number}.png`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error(err);
+      toast.error("Couldn't download the pass.");
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   return (
     <li
       className={cn(
@@ -249,10 +307,14 @@ function GuestQr({
           redeemed && "bg-muted",
         )}
       >
-        <QRCodeSVG
+        {/* Rendered at 512px for download resolution; CSS-scaled to 160px for
+            the on-screen display. Keeps a single source of truth per guest. */}
+        <QRCodeCanvas
+          ref={canvasRef}
           value={guest.qr_code}
-          size={160}
+          size={512}
           level="M"
+          style={{ width: 160, height: 160 }}
           aria-label={`QR code for guest ${guest.guest_number}`}
         />
       </div>
@@ -270,8 +332,139 @@ function GuestQr({
           {formatRedeemedAt(guest.redeemed_at)}
         </p>
       ) : null}
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={onDownload}
+        disabled={downloading}
+      >
+        <Download className="h-4 w-4" aria-hidden />
+        {downloading ? "Preparing…" : "Download"}
+      </Button>
     </li>
   );
+}
+
+// Composites a printable entrance pass: facility header, QR, guest label,
+// booking details, and a tiny code reference at the foot. Rendered in an
+// off-screen canvas at a fixed 640×960 so exports look sharp on phone
+// screens, in messaging apps, and on letter-sized prints.
+async function renderPassPng(params: {
+  qrCanvas: HTMLCanvasElement;
+  facilityName: string;
+  guest: MyBookingGuest;
+  total: number;
+  courtName: string;
+  date: string;
+  startHour: number;
+  endHour: number;
+}): Promise<Blob | null> {
+  const { qrCanvas, facilityName, guest, total, courtName, date, startHour, endHour } =
+    params;
+
+  const W = 640;
+  const H = 960;
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  // Card background + outer rounded border for a "pass" feel.
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, W, H);
+  drawRoundedRectStroke(ctx, 16, 16, W - 32, H - 32, 24, "#e5e7eb", 2);
+
+  // Top band — dark header with the facility name.
+  const bandH = 80;
+  ctx.fillStyle = "#0f172a";
+  roundedRectPath(ctx, 32, 32, W - 64, bandH, 16);
+  ctx.fill();
+  ctx.fillStyle = "#ffffff";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.font =
+    "600 22px ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+  ctx.fillText(facilityName, W / 2, 32 + bandH / 2 - 12);
+  ctx.font =
+    "500 13px ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+  ctx.fillStyle = "#cbd5e1";
+  ctx.fillText("ENTRANCE PASS", W / 2, 32 + bandH / 2 + 14);
+
+  // QR block — soft-gray tile behind the code so it reads on any background.
+  const qrSize = 420;
+  const qrX = (W - qrSize) / 2;
+  const qrY = 150;
+  ctx.fillStyle = "#f8fafc";
+  roundedRectPath(ctx, qrX - 20, qrY - 20, qrSize + 40, qrSize + 40, 18);
+  ctx.fill();
+  ctx.drawImage(qrCanvas, qrX, qrY, qrSize, qrSize);
+
+  // Guest label — big and centered directly under the code.
+  const labelY = qrY + qrSize + 64;
+  ctx.fillStyle = "#0f172a";
+  ctx.font =
+    "700 30px ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+  ctx.fillText(`Guest ${guest.guest_number} of ${total}`, W / 2, labelY);
+
+  // Booking details block.
+  const detailsY = labelY + 48;
+  ctx.fillStyle = "#334155";
+  ctx.font =
+    "600 18px ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+  ctx.fillText(courtName, W / 2, detailsY);
+
+  ctx.fillStyle = "#64748b";
+  ctx.font =
+    "400 15px ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+  ctx.fillText(formatFacilityDate(date), W / 2, detailsY + 26);
+  ctx.fillText(formatHourRange(startHour, endHour), W / 2, detailsY + 50);
+
+  // Tiny code reference at the foot for scanner-log cross-checks.
+  ctx.fillStyle = "#94a3b8";
+  ctx.font = "11px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.fillText(guest.qr_code, W / 2, H - 36);
+
+  return new Promise<Blob | null>((resolve) => {
+    canvas.toBlob((b) => resolve(b), "image/png");
+  });
+}
+
+function roundedRectPath(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function drawRoundedRectStroke(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+  color: string,
+  width: number,
+) {
+  roundedRectPath(ctx, x, y, w, h, r);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.stroke();
 }
 
 function EmptyState({ filter }: { filter: Filter }) {
