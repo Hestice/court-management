@@ -2,6 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 
+import {
+  checkPreset,
+  formatRetryAfter,
+} from "@/lib/rate-limit";
 import { createClient } from "@/lib/supabase/server";
 import { formatHour, todayInFacility } from "@/lib/timezone";
 import { createBookingSchema, type CreateBookingValues } from "./schema";
@@ -32,6 +36,14 @@ export async function createBooking(
   } = await supabase.auth.getUser();
   if (!user) {
     return { success: false, error: "Not authenticated." };
+  }
+
+  const rate = await checkPreset("bookingSubmit", user.id);
+  if (!rate.allowed) {
+    return {
+      success: false,
+      error: `You've hit the booking rate limit. ${formatRetryAfter(rate.retryAfterSeconds)}`,
+    };
   }
 
   if (booking_date < todayInFacility()) {

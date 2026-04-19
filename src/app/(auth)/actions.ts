@@ -3,6 +3,11 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import {
+  checkPreset,
+  formatRetryAfter,
+  getRequestIp,
+} from "@/lib/rate-limit";
 
 export type AuthResult = { error?: string } | void;
 
@@ -10,6 +15,12 @@ export async function login(_prev: AuthResult, formData: FormData): Promise<Auth
   const email = String(formData.get("email") ?? "").trim();
   const password = String(formData.get("password") ?? "");
   const next = String(formData.get("next") ?? "");
+
+  const ip = await getRequestIp();
+  const rate = await checkPreset("login", ip);
+  if (!rate.allowed) {
+    return { error: `Too many login attempts. ${formatRetryAfter(rate.retryAfterSeconds)}` };
+  }
 
   const supabase = await createClient();
   const { error } = await supabase.auth.signInWithPassword({ email, password });
@@ -46,6 +57,14 @@ export async function register(_prev: AuthResult, formData: FormData): Promise<A
 
   if (name.length < 2) {
     return { error: "Name must be at least 2 characters." };
+  }
+
+  const ip = await getRequestIp();
+  const rate = await checkPreset("register", ip);
+  if (!rate.allowed) {
+    return {
+      error: `Too many signups from this address. ${formatRetryAfter(rate.retryAfterSeconds)}`,
+    };
   }
 
   const supabase = await createClient();
