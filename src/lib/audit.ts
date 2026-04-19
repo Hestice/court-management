@@ -21,14 +21,11 @@ export type AuditAction =
   | "booking.cancelled"
   | "booking.completed"
   | "booking.note_updated"
-  | "pass.created"
-  | "pass.walkin_created"
-  | "pass.receipt_uploaded"
-  | "pass.approved"
-  | "pass.rejected"
-  | "pass.cancelled"
-  | "pass.note_updated"
-  | "pass.guest_redeemed";
+  | "booking.guest_count_changed"
+  | "booking.guest_redeemed"
+  | "walk_in_entry.created"
+  | "walk_in_entry.deleted"
+  | "walk_in_entry.note_updated";
 
 export type AuditMetadata = Record<string, unknown>;
 
