@@ -2,11 +2,20 @@
 
 import { useRef, useState, useTransition } from "react";
 import Link from "next/link";
-import { CheckCircle2, ImageOff, Upload } from "lucide-react";
+import { CheckCircle2, ImageOff, Pencil, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import {
   CLIENT_UPLOAD_MAX_BYTES,
   SCREENSHOT_ACCEPT_ATTRIBUTE,
@@ -17,8 +26,9 @@ import {
   formatHourRange,
 } from "@/lib/timezone";
 import { cn } from "@/lib/utils";
+import { GUEST_COUNT_MAX, GUEST_COUNT_MIN } from "@/lib/zod-helpers";
 
-import { uploadReceipt } from "./actions";
+import { editBookingGuestCount, uploadReceipt } from "./actions";
 
 export type PaymentMethodForCustomer = {
   id: string;
@@ -27,23 +37,20 @@ export type PaymentMethodForCustomer = {
   qr_public_url: string | null;
 };
 
-export type PaymentSummary =
-  | {
-      kind: "booking";
-      court: string;
-      date: string;
-      startHour: number;
-      endHour: number;
-      totalAmount: number;
-      status: string;
-    }
-  | {
-      kind: "pass";
-      date: string;
-      guestCount: number;
-      totalAmount: number;
-      status: string;
-    };
+// Union-shaped so the loader can add more entity kinds later without churning
+// this component. Only "booking" is wired up today.
+export type PaymentSummary = {
+  kind: "booking";
+  court: string;
+  hourlyRate: number;
+  date: string;
+  startHour: number;
+  endHour: number;
+  guestCount: number;
+  entrancePricePerGuest: number;
+  totalAmount: number;
+  status: string;
+};
 
 function formatPHP(amount: number): string {
   return new Intl.NumberFormat("en-PH", {
@@ -54,20 +61,19 @@ function formatPHP(amount: number): string {
 }
 
 export function PaymentView({
-  kind,
-  entityId,
-  summary,
+  bookingId,
+  summary: initialSummary,
   methods,
   initialReceipt,
   isAdminViewer,
 }: {
-  kind: "booking" | "pass";
-  entityId: string;
+  bookingId: string;
   summary: PaymentSummary;
   methods: PaymentMethodForCustomer[];
   initialReceipt: { path: string; signedUrl: string | null } | null;
   isAdminViewer: boolean;
 }) {
+  const [summary, setSummary] = useState(initialSummary);
   const [receipt, setReceipt] = useState<{
     path: string;
     signedUrl: string | null;
@@ -75,10 +81,11 @@ export function PaymentView({
   const [pending, startTransition] = useTransition();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
+  const [guestEditOpen, setGuestEditOpen] = useState(false);
 
   const canUpload = !isAdminViewer && summary.status === "pending";
-  const listHref = kind === "pass" ? "/my-passes" : "/my-bookings";
-  const listLabel = kind === "pass" ? "View my passes" : "View my bookings";
+  const guestCountEditable =
+    !isAdminViewer && summary.status === "pending" && !receipt;
 
   function submitFile(file: File) {
     if (!isAcceptedScreenshotMime(file.type)) {
@@ -94,7 +101,7 @@ export function PaymentView({
     formData.set("file", file);
 
     startTransition(async () => {
-      const result = await uploadReceipt(kind, entityId, formData);
+      const result = await uploadReceipt(bookingId, formData);
       if (result.success) {
         setReceipt({ path: result.path, signedUrl: result.signedUrl });
         toast.success("Receipt uploaded");
@@ -131,49 +138,12 @@ export function PaymentView({
         </p>
       </div>
 
-      <section
-        aria-labelledby="summary-heading"
-        className="flex flex-col gap-3 rounded-lg border border-border p-4"
-      >
-        <div className="flex items-center justify-between gap-3">
-          <h2
-            id="summary-heading"
-            className="text-sm font-medium text-muted-foreground"
-          >
-            {summary.kind === "pass" ? "Entrance pass" : "Booking summary"}
-          </h2>
-          <StatusBadge status={summary.status} />
-        </div>
-        {summary.kind === "booking" ? (
-          <>
-            <SummaryRow label="Court" value={summary.court} />
-            <SummaryRow
-              label="Date"
-              value={formatFacilityDate(summary.date)}
-            />
-            <SummaryRow
-              label="Time"
-              value={formatHourRange(summary.startHour, summary.endHour)}
-            />
-          </>
-        ) : (
-          <>
-            <SummaryRow
-              label="Date"
-              value={formatFacilityDate(summary.date)}
-            />
-            <SummaryRow
-              label="Guests"
-              value={`${summary.guestCount} ${summary.guestCount === 1 ? "guest" : "guests"}`}
-            />
-          </>
-        )}
-        <SummaryRow
-          label="Total"
-          value={formatPHP(summary.totalAmount)}
-          strong
-        />
-      </section>
+      <ReceiptSummary
+        summary={summary}
+        guestCountEditable={guestCountEditable}
+        onEditGuestCount={() => setGuestEditOpen(true)}
+        receiptUploaded={!!receipt}
+      />
 
       <section aria-labelledby="methods-heading" className="flex flex-col gap-3">
         <h2 id="methods-heading" className="text-lg font-medium">
@@ -233,12 +203,11 @@ export function PaymentView({
         {isAdminViewer ? (
           <div className="rounded-lg border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
             Admin view — uploading is only available to the customer who made
-            the {kind === "pass" ? "purchase" : "booking"}.
+            the booking.
           </div>
         ) : summary.status !== "pending" ? (
           <div className="rounded-lg border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
-            Your {kind === "pass" ? "pass" : "booking"} is {summary.status}.
-            Upload is no longer available.
+            Your booking is {summary.status}. Upload is no longer available.
           </div>
         ) : (
           <>
@@ -311,8 +280,8 @@ export function PaymentView({
             </label>
 
             <p className="rounded-md bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
-              Your {kind === "pass" ? "pass" : "booking"} is pending admin
-              review. You&apos;ll receive an email once confirmed.
+              Your booking is pending admin review. You&apos;ll receive an email
+              once confirmed.
             </p>
           </>
         )}
@@ -320,29 +289,209 @@ export function PaymentView({
 
       <div className="flex gap-3">
         <Button asChild variant="ghost">
-          <Link href={listHref}>{listLabel}</Link>
+          <Link href="/my-bookings">View my bookings</Link>
         </Button>
       </div>
+
+      <GuestCountDialog
+        open={guestEditOpen}
+        onOpenChange={setGuestEditOpen}
+        bookingId={bookingId}
+        currentCount={summary.guestCount}
+        onSaved={(next) =>
+          setSummary((prev) => ({
+            ...prev,
+            guestCount: next.guestCount,
+            totalAmount: next.totalAmount,
+          }))
+        }
+      />
     </>
   );
 }
 
-function SummaryRow({
-  label,
-  value,
-  strong,
+function ReceiptSummary({
+  summary,
+  guestCountEditable,
+  onEditGuestCount,
+  receiptUploaded,
 }: {
-  label: string;
-  value: string;
-  strong?: boolean;
+  summary: PaymentSummary;
+  guestCountEditable: boolean;
+  onEditGuestCount: () => void;
+  receiptUploaded: boolean;
 }) {
+  const hours = summary.endHour - summary.startHour;
+  const courtRentalTotal = summary.hourlyRate * hours;
+  const entranceTotal = summary.entrancePricePerGuest * summary.guestCount;
+
   return (
-    <div className="flex items-center justify-between gap-4 text-sm">
-      <span className="text-muted-foreground">{label}</span>
-      <span className={cn(strong ? "text-base font-semibold" : "font-medium")}>
-        {value}
-      </span>
+    <section
+      aria-labelledby="summary-heading"
+      className="flex flex-col gap-3 rounded-lg border border-border p-4"
+    >
+      <div className="flex items-center justify-between gap-3">
+        <h2
+          id="summary-heading"
+          className="text-sm font-medium text-muted-foreground"
+        >
+          Receipt summary
+        </h2>
+        <StatusBadge status={summary.status} />
+      </div>
+
+      <div className="flex flex-col gap-1 text-sm">
+        <p className="font-medium">
+          {summary.court} · {formatFacilityDate(summary.date)}
+        </p>
+        <p className="text-muted-foreground">
+          {formatHourRange(summary.startHour, summary.endHour)} ({hours}{" "}
+          {hours === 1 ? "hour" : "hours"})
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-2 border-t border-border pt-3 text-sm">
+        <LineItem
+          label={`Court rental: ${formatPHP(summary.hourlyRate)}/hr × ${hours}`}
+          value={formatPHP(courtRentalTotal)}
+        />
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <span>
+              Entrance: {formatPHP(summary.entrancePricePerGuest)}/person ×{" "}
+              {summary.guestCount}
+            </span>
+            {guestCountEditable ? (
+              <button
+                type="button"
+                onClick={onEditGuestCount}
+                className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+              >
+                <Pencil className="h-3 w-3" aria-hidden />
+                Edit
+              </button>
+            ) : null}
+          </div>
+          <span className="font-medium tabular-nums">
+            {formatPHP(entranceTotal)}
+          </span>
+        </div>
+        <div className="mt-1 flex items-center justify-between gap-3 border-t border-border pt-2">
+          <span className="font-medium">Total</span>
+          <span className="text-base font-semibold tabular-nums">
+            {formatPHP(summary.totalAmount)}
+          </span>
+        </div>
+      </div>
+
+      {!guestCountEditable && summary.status === "pending" ? (
+        <p className="text-xs text-muted-foreground">
+          {receiptUploaded
+            ? "Guest count locked. Contact admin to adjust at the facility."
+            : null}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+function LineItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span>{label}</span>
+      <span className="font-medium tabular-nums">{value}</span>
     </div>
+  );
+}
+
+function GuestCountDialog({
+  open,
+  onOpenChange,
+  bookingId,
+  currentCount,
+  onSaved,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  bookingId: string;
+  currentCount: number;
+  onSaved: (next: { guestCount: number; totalAmount: number }) => void;
+}) {
+  const [count, setCount] = useState(currentCount);
+  const [pending, startTransition] = useTransition();
+
+  const [wasOpen, setWasOpen] = useState(open);
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    if (open) setCount(currentCount);
+  }
+
+  function onSubmit() {
+    startTransition(async () => {
+      const res = await editBookingGuestCount(bookingId, {
+        guest_count: count,
+      });
+      if (res.success) {
+        onSaved({ guestCount: res.guestCount, totalAmount: res.totalAmount });
+        toast.success("Guest count updated");
+        onOpenChange(false);
+      } else {
+        toast.error(res.error);
+      }
+    });
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && !pending && onOpenChange(o)}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Edit guest count</DialogTitle>
+          <DialogDescription>
+            Adjust the number of people entering the facility. The total will
+            recalculate automatically.
+          </DialogDescription>
+        </DialogHeader>
+        <label className="flex flex-col gap-1">
+          <span className="text-sm font-medium">Number of guests</span>
+          <Input
+            type="number"
+            inputMode="numeric"
+            min={GUEST_COUNT_MIN}
+            max={GUEST_COUNT_MAX}
+            step={1}
+            value={Number.isFinite(count) ? count : ""}
+            onChange={(e) => {
+              const n = e.target.valueAsNumber;
+              setCount(Number.isFinite(n) ? Math.floor(n) : 0);
+            }}
+            disabled={pending}
+          />
+          <span className="text-xs text-muted-foreground">
+            Between {GUEST_COUNT_MIN} and {GUEST_COUNT_MAX}.
+          </span>
+        </label>
+        <DialogFooter>
+          <Button
+            variant="ghost"
+            onClick={() => onOpenChange(false)}
+            disabled={pending}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={onSubmit}
+            disabled={
+              pending ||
+              count < GUEST_COUNT_MIN ||
+              count > GUEST_COUNT_MAX ||
+              count === currentCount
+            }
+          >
+            {pending ? "Saving…" : "Save"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -355,7 +504,6 @@ function StatusBadge({ status }: { status: string }) {
     confirmed:
       "border-emerald-300 bg-emerald-100 text-emerald-900 dark:border-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200",
     cancelled: "border-destructive/40 bg-destructive/10 text-destructive",
-    expired: "border-destructive/40 bg-destructive/10 text-destructive",
     completed: "",
   };
   return (

@@ -26,25 +26,6 @@ export async function deleteBookingReceipt(
   }
 }
 
-// Same shape as deleteBookingReceipt — separate function so the log key
-// ("pass.receipt_delete_failed") distinguishes the origin in Vercel's log
-// pane. Called on approve/reject/cancel and eventually auto-expiry.
-export async function deletePassReceipt(
-  path: string | null | undefined,
-): Promise<void> {
-  if (!path) return;
-  try {
-    const service = createServiceClient();
-    const { error } = await service.storage
-      .from(RECEIPT_BUCKET)
-      .remove([path]);
-    if (error) {
-      logError("pass.receipt_delete_failed", error, { path });
-    }
-  } catch (err) {
-    logError("pass.receipt_delete_exception", err, { path });
-  }
-}
 
 // Short-lived signed URL for rendering a private receipt. Uses the service
 // client so admin-side rendering works without maintaining receipt-select
