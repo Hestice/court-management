@@ -20,6 +20,9 @@ export const RATE_LIMITS = {
   bookingSubmit: { limit: 10, windowSeconds: 60 * 60 },
   contact: { limit: 3, windowSeconds: 60 * 60 },
   fileUpload: { limit: 20, windowSeconds: 60 * 60 },
+  // Gate scanner — 60/min covers a busy check-in burst but caps a runaway
+  // loop from a faulty camera. Scoped per admin user.
+  scanRedeem: { limit: 60, windowSeconds: 60 },
 } as const;
 
 export type RateLimitPreset = keyof typeof RATE_LIMITS;

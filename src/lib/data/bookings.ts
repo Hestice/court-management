@@ -136,6 +136,52 @@ export type BookingGuestForRedeem = {
   redeemed_at: string | null;
 };
 
+// Full gate-scan payload: guest + parent booking + court + customer. A single
+// indexed lookup on booking_guests.qr_code joins the rest, so the scanner
+// round-trip is one query.
+export type BookingGuestForScan = {
+  id: string;
+  booking_id: string;
+  guest_number: number;
+  qr_code: string;
+  redeemed_at: string | null;
+  redeemed_by: string | null;
+  redeemed_by_user: { name: string | null; email: string } | null;
+  booking: {
+    id: string;
+    booking_date: string;
+    start_hour: number;
+    end_hour: number;
+    status: string;
+    guest_count: number;
+    walk_in_name: string | null;
+    customer: { name: string | null; email: string } | null;
+    court: { name: string } | null;
+  } | null;
+};
+
+// One row per confirmed booking on a given date, with nested guests. Used to
+// populate the manual-lookup panel on /admin/scan so the admin can search by
+// customer name or QR prefix without a round trip per keystroke.
+export type BookingForScanSearch = {
+  id: string;
+  booking_date: string;
+  start_hour: number;
+  end_hour: number;
+  status: string;
+  guest_count: number;
+  walk_in_name: string | null;
+  customer: { name: string | null; email: string } | null;
+  court: { name: string } | null;
+  guests: {
+    id: string;
+    guest_number: number;
+    qr_code: string;
+    redeemed_at: string | null;
+    redeemed_by_user: { name: string | null; email: string } | null;
+  }[];
+};
+
 const FULL_SELECT =
   "id, booking_date, start_hour, end_hour, status, total_amount, guest_count, expires_at, created_at, payment_receipt_url, user_id, walk_in_name, walk_in_phone, admin_notes, customer:users!bookings_user_id_fkey(name, email), court:courts!bookings_court_id_fkey(id, name, hourly_rate)";
 
@@ -399,3 +445,64 @@ export async function listOverlappingBookings(params: {
     throwDataError("data.bookings.list_overlapping", error, { ...params });
   return data ?? [];
 }
+
+// Gate scan: one row by qr_code, including everything the scanner result card
+// needs to render. booking_guests.qr_code has a UNIQUE index so this is a
+// point lookup.
+const SCAN_GUEST_SELECT =
+  "id, booking_id, guest_number, qr_code, redeemed_at, redeemed_by, " +
+  "redeemed_by_user:users!booking_guests_redeemed_by_fkey(name, email), " +
+  "booking:bookings!booking_guests_booking_id_fkey(" +
+  "id, booking_date, start_hour, end_hour, status, guest_count, walk_in_name, " +
+  "customer:users!bookings_user_id_fkey(name, email), " +
+  "court:courts!bookings_court_id_fkey(name))";
+
+export async function getBookingGuestByQrCode(
+  qrCode: string,
+): Promise<BookingGuestForScan | null> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("booking_guests")
+    .select(SCAN_GUEST_SELECT)
+    .eq("qr_code", qrCode)
+    .maybeSingle();
+  if (error) throwDataError("data.booking_guests.get_by_qr", error);
+  return (data as unknown as BookingGuestForScan) ?? null;
+}
+
+export async function getBookingGuestForScan(
+  id: string,
+): Promise<BookingGuestForScan | null> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("booking_guests")
+    .select(SCAN_GUEST_SELECT)
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throwDataError("data.booking_guests.get_for_scan", error, { id });
+  return (data as unknown as BookingGuestForScan) ?? null;
+}
+
+// Confirmed bookings on `date` with their guests inlined. Used by the
+// /admin/scan manual-lookup panel, which filters in-memory as the admin
+// types — a busy day is O(courts * hours) rows, cheap for one fetch.
+export const listConfirmedBookingsForDateWithGuests = cache(
+  async (date: string): Promise<BookingForScanSearch[]> => {
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .from("bookings")
+      .select(
+        "id, booking_date, start_hour, end_hour, status, guest_count, walk_in_name, " +
+          "customer:users!bookings_user_id_fkey(name, email), " +
+          "court:courts!bookings_court_id_fkey(name), " +
+          "guests:booking_guests(id, guest_number, qr_code, redeemed_at, " +
+          "redeemed_by_user:users!booking_guests_redeemed_by_fkey(name, email))",
+      )
+      .eq("booking_date", date)
+      .eq("status", "confirmed")
+      .order("start_hour", { ascending: true });
+    if (error)
+      throwDataError("data.bookings.list_for_scan_search", error, { date });
+    return (data ?? []) as unknown as BookingForScanSearch[];
+  },
+);
