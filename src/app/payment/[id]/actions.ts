@@ -227,12 +227,29 @@ export async function editBookingGuestCount(
     Number(court.hourly_rate) * hours +
     Number(settings.entrance_pass_price_per_guest) * guest_count;
 
-  const { error: updateError } = await supabase
+  // Service client for the UPDATE because bookings RLS only permits admin
+  // UPDATEs. Ownership + pending + no-receipt were all verified above, so
+  // bypassing RLS here is safe. Without this, the user-scoped UPDATE silently
+  // matches 0 rows (RLS filters without raising) — the toast succeeds but
+  // nothing persists. `.select()` forces PostgREST to return the row so a
+  // 0-row outcome becomes a loud error if this assumption ever breaks.
+  const service = createServiceClient();
+  const { data: updated, error: updateError } = await service
     .from("bookings")
     .update({ guest_count, total_amount })
-    .eq("id", bookingId);
+    .eq("id", bookingId)
+    .select("id")
+    .maybeSingle();
   if (updateError) {
     logError("booking.guest_count_update_failed", updateError, { bookingId });
+    return { success: false, error: "Couldn't update guest count." };
+  }
+  if (!updated) {
+    logError(
+      "booking.guest_count_update_no_row",
+      new Error("update affected 0 rows"),
+      { bookingId },
+    );
     return { success: false, error: "Couldn't update guest count." };
   }
 
