@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { facilityNow } from "@/lib/timezone";
 
 export type AvailabilityStatus =
   | "available"
@@ -19,34 +20,6 @@ export type CourtAvailability = {
   court: { id: string; name: string; hourly_rate: number };
   hours: HourAvailability[];
 };
-
-// Single-facility MVP: treat the facility as operating in Manila time so that
-// "today" and the current hour match what a customer in the facility would see.
-// Revisit when multi-venue support lands.
-const FACILITY_TIMEZONE = "Asia/Manila";
-
-type FacilityNow = { today: string; currentHour: number };
-
-function facilityNow(): FacilityNow {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: FACILITY_TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    hour12: false,
-  }).formatToParts(new Date());
-
-  const year = parts.find((p) => p.type === "year")!.value;
-  const month = parts.find((p) => p.type === "month")!.value;
-  const day = parts.find((p) => p.type === "day")!.value;
-  // en-CA with hour12=false emits "24" at the instant that would otherwise be
-  // midnight of the following day; normalize it back to 0.
-  const rawHour = Number(parts.find((p) => p.type === "hour")!.value);
-  const currentHour = rawHour === 24 ? 0 : rawHour;
-
-  return { today: `${year}-${month}-${day}`, currentHour };
-}
 
 export async function getAvailability(params: {
   date: string;

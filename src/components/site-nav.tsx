@@ -11,14 +11,18 @@ export async function SiteNav() {
   } = await supabase.auth.getUser();
 
   let displayName: string | null = null;
+  let role: string | null = null;
   if (user) {
     const { data: profile } = await supabase
       .from("users")
-      .select("name, email")
+      .select("name, email, role")
       .eq("id", user.id)
       .maybeSingle();
     displayName = profile?.name?.trim() || profile?.email || user.email || null;
+    role = profile?.role ?? null;
   }
+
+  const showCustomerLinks = !!user && role !== "admin";
 
   return (
     <SiteNavClient>
@@ -28,6 +32,16 @@ export async function SiteNav() {
             Your Facility
           </Link>
           <nav className="flex items-center gap-2 text-sm">
+            {showCustomerLinks ? (
+              <>
+                <Button asChild variant="ghost" size="sm">
+                  <Link href="/booking">Book a court</Link>
+                </Button>
+                <Button asChild variant="ghost" size="sm">
+                  <Link href="/my-bookings">My bookings</Link>
+                </Button>
+              </>
+            ) : null}
             {user ? (
               <>
                 <span className="hidden text-muted-foreground sm:inline">{displayName}</span>

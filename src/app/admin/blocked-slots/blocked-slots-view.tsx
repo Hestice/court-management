@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Plus, Trash2 } from "lucide-react";
@@ -42,41 +41,13 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import {
+  formatFacilityDate as formatDate,
+  formatHour,
+  formatHourRange as formatRange,
+  todayInFacility,
+} from "@/lib/timezone";
 import { cn } from "@/lib/utils";
-
-function formatHour(hour: number): string {
-  const normalized = ((hour % 24) + 24) % 24;
-  const suffix = normalized < 12 ? "am" : "pm";
-  const display = normalized % 12 === 0 ? 12 : normalized % 12;
-  return `${display}${suffix}`;
-}
-
-function formatRange(start: number, end: number): string {
-  return `${formatHour(start)}–${formatHour(end)}`;
-}
-
-function formatDate(iso: string): string {
-  const [y, m, d] = iso.split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    timeZone: "UTC",
-  });
-}
-
-function todayInManila(): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Manila",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  return `${parts.find((p) => p.type === "year")!.value}-${
-    parts.find((p) => p.type === "month")!.value
-  }-${parts.find((p) => p.type === "day")!.value}`;
-}
 
 type Filter = "upcoming" | "past";
 
@@ -99,9 +70,8 @@ export function BlockedSlotsView({
   } | null>(null);
   const [deletePending, startDeleteTransition] = useTransition();
   const [bulkPending, startBulkTransition] = useTransition();
-  const router = useRouter();
 
-  const today = todayInManila();
+  const today = todayInFacility();
 
   const { upcoming, past } = useMemo(() => {
     const up: BlockedSlotRow[] = [];
@@ -154,7 +124,7 @@ export function BlockedSlotsView({
       if (result.success) {
         toast.success("Slot unblocked");
         setDeleting(null);
-        router.refresh();
+        // revalidatePath() in the server action refreshes this page.
       } else {
         toast.error(result.error ?? "Failed to unblock slot.");
       }
@@ -181,7 +151,6 @@ export function BlockedSlotsView({
       }
       ctx.clear();
       setBulkConfirm(null);
-      router.refresh();
     });
   }
 
@@ -257,7 +226,6 @@ export function BlockedSlotsView({
           operatingEnd={operatingEnd}
           today={today}
           onClose={() => setAddOpen(false)}
-          onSaved={() => router.refresh()}
         />
       ) : null}
 
@@ -362,14 +330,12 @@ function AddBlockedSlotDialog({
   operatingEnd,
   today,
   onClose,
-  onSaved,
 }: {
   courts: CourtOption[];
   operatingStart: number;
   operatingEnd: number;
   today: string;
   onClose: () => void;
-  onSaved: () => void;
 }) {
   const [pending, startTransition] = useTransition();
 
@@ -396,7 +362,6 @@ function AddBlockedSlotDialog({
       const result = await createBlockedSlot(values);
       if (result.success) {
         toast.success("Slot blocked");
-        onSaved();
         onClose();
       } else {
         toast.error(result.error ?? "Failed to block slot.");

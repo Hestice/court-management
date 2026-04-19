@@ -3,21 +3,15 @@
 import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
+import {
+  formatHour,
+  formatHourRange as formatRange,
+  todayInFacility,
+} from "@/lib/timezone";
+import { addDaysIso, BLOCK_DATE_MAX_DAYS } from "@/lib/zod-helpers";
 import { createBlockSchema, type CreateBlockValues } from "./schema";
 
 export type ActionResult = { success: boolean; error?: string };
-
-// e.g. 14 → "2pm", 0 → "12am", 12 → "12pm", 24 → "12am"
-function formatHour(hour: number): string {
-  const normalized = ((hour % 24) + 24) % 24;
-  const suffix = normalized < 12 ? "am" : "pm";
-  const display = normalized % 12 === 0 ? 12 : normalized % 12;
-  return `${display}${suffix}`;
-}
-
-function formatRange(start: number, end: number): string {
-  return `${formatHour(start)}–${formatHour(end)}`;
-}
 
 export async function createBlockedSlot(
   values: CreateBlockValues,
@@ -50,18 +44,17 @@ export async function createBlockedSlot(
     return { success: false, error: "Court is not active." };
   }
 
-  // Validate date is today or future (facility local date).
-  const todayParts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Manila",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const today = `${todayParts.find((p) => p.type === "year")!.value}-${
-    todayParts.find((p) => p.type === "month")!.value
-  }-${todayParts.find((p) => p.type === "day")!.value}`;
+  // Validate date is today or future (facility local date) and within the
+  // allowed future window. 365 days is well beyond any legitimate block.
+  const today = todayInFacility();
   if (slot_date < today) {
     return { success: false, error: "Date must be today or later." };
+  }
+  if (slot_date > addDaysIso(today, BLOCK_DATE_MAX_DAYS)) {
+    return {
+      success: false,
+      error: `Date must be within ${BLOCK_DATE_MAX_DAYS} days.`,
+    };
   }
 
   // Validate hours fall inside operating hours.

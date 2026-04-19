@@ -1,10 +1,20 @@
 import * as z from "zod";
 
+import {
+  HOURLY_RATE_MAX,
+  NAME_MAX,
+  safeText,
+} from "@/lib/zod-helpers";
+
 export const courtFormSchema = z.object({
-  name: z.string().trim().min(1, { message: "Name is required." }).max(80),
+  name: safeText({ min: 1, max: NAME_MAX, label: "Name" }),
   hourly_rate: z
     .number({ message: "Hourly rate must be a number." })
-    .min(0, { message: "Hourly rate must be 0 or greater." }),
+    .finite({ message: "Hourly rate must be a finite number." })
+    .min(0, { message: "Hourly rate must be 0 or greater." })
+    .max(HOURLY_RATE_MAX, {
+      message: `Hourly rate must be ${HOURLY_RATE_MAX} or less.`,
+    }),
   is_active: z.boolean().optional(),
 });
 
@@ -18,7 +28,11 @@ export const createCourtsSchema = z.object({
     .max(20, { message: "Add at most 20 courts at a time." }),
   hourly_rate: z
     .number({ message: "Hourly rate must be a number." })
-    .min(0, { message: "Hourly rate must be 0 or greater." }),
+    .finite({ message: "Hourly rate must be a finite number." })
+    .min(0, { message: "Hourly rate must be 0 or greater." })
+    .max(HOURLY_RATE_MAX, {
+      message: `Hourly rate must be ${HOURLY_RATE_MAX} or less.`,
+    }),
 });
 
 export type CreateCourtsValues = z.infer<typeof createCourtsSchema>;

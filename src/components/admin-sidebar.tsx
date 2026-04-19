@@ -7,6 +7,7 @@ import {
   ClipboardList,
   Cog,
   CreditCard,
+  FileText,
   Inbox,
   LayoutGrid,
   LogOut,
@@ -40,6 +41,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/admin/blocked-slots", label: "Blocked Slots", icon: ShieldBan },
   { href: "/admin/payment-settings", label: "Payment Settings", icon: CreditCard },
   { href: "/admin/inquiries", label: "Inquiries", icon: Inbox },
+  { href: "/admin/audit-log", label: "Audit Log", icon: FileText },
   { href: "/admin/settings", label: "Settings", icon: Cog },
 ];
 
