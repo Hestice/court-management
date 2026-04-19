@@ -1,5 +1,6 @@
 import { headers } from "next/headers";
 
+import { logError } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
 
 // The single public interface. Every call site in the app goes through this
@@ -36,15 +37,29 @@ export async function checkRateLimit(
   });
 
   if (error) {
-    // Fail open on infrastructure errors — don't lock real users out if the
-    // RPC is down. The trade-off is accepted because the limiter's goal is
-    // abuse mitigation, not correctness enforcement.
-    console.error("[rate-limit] rpc failed", error);
+    // Fail open on infrastructure errors — don't lock real users out of a
+    // working app over a broken limiter. The limiter's goal is abuse
+    // mitigation, not correctness enforcement. Log loudly so we notice.
+    logError("rate_limit.rpc_failed", error, {
+      key,
+      limit,
+      windowSeconds,
+      pgCode: (error as { code?: string }).code,
+      hint: (error as { hint?: string }).hint,
+    });
     return { allowed: true };
   }
 
   const payload = data as { allowed?: boolean; retry_after_seconds?: number } | null;
-  if (!payload) return { allowed: true };
+  if (!payload) {
+    // Unexpected shape — also fail open but flag it.
+    logError("rate_limit.empty_response", new Error("RPC returned empty"), {
+      key,
+      limit,
+      windowSeconds,
+    });
+    return { allowed: true };
+  }
 
   return {
     allowed: !!payload.allowed,
