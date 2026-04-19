@@ -2,7 +2,12 @@
 
 import { revalidatePath } from "next/cache";
 
-import { createClient } from "@/lib/supabase/server";
+import { requireAdmin } from "@/lib/actions";
+import { listOverlappingBlocks } from "@/lib/data/blocked-slots";
+import { listOverlappingBookings } from "@/lib/data/bookings";
+import { getCourt } from "@/lib/data/courts";
+import { getFacilitySettings } from "@/lib/data/facility-settings";
+import { logError } from "@/lib/logger";
 import {
   formatHour,
   formatHourRange as formatRange,
@@ -11,7 +16,7 @@ import {
 import { addDaysIso, BLOCK_DATE_MAX_DAYS } from "@/lib/zod-helpers";
 import { createBlockSchema, type CreateBlockValues } from "./schema";
 
-export type ActionResult = { success: boolean; error?: string };
+export type ActionResult = { success: true } | { success: false; error: string };
 
 export async function createBlockedSlot(
   values: CreateBlockValues,
@@ -23,22 +28,12 @@ export async function createBlockedSlot(
 
   const { court_id, slot_date, start_hour, end_hour, reason } = parsed.data;
 
-  const supabase = await createClient();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return { success: false, error: "Not authenticated." };
-  }
+  const auth = await requireAdmin();
+  if (!auth.ok) return { success: false, error: auth.error };
+  const { supabase, userId } = auth;
 
   // Validate court is active.
-  const { data: court, error: courtError } = await supabase
-    .from("courts")
-    .select("id, is_active")
-    .eq("id", court_id)
-    .maybeSingle();
-  if (courtError) return { success: false, error: courtError.message };
+  const court = await getCourt(court_id);
   if (!court) return { success: false, error: "Court not found." };
   if (!court.is_active) {
     return { success: false, error: "Court is not active." };
@@ -58,14 +53,9 @@ export async function createBlockedSlot(
   }
 
   // Validate hours fall inside operating hours.
-  const { data: settings, error: settingsError } = await supabase
-    .from("facility_settings")
-    .select("operating_hours_start, operating_hours_end")
-    .eq("id", 1)
-    .maybeSingle();
-  if (settingsError) return { success: false, error: settingsError.message };
-  const opStart = settings?.operating_hours_start ?? 8;
-  const opEnd = settings?.operating_hours_end ?? 22;
+  const settings = await getFacilitySettings();
+  const opStart = settings.operating_hours_start;
+  const opEnd = settings.operating_hours_end;
   if (start_hour < opStart || start_hour >= opEnd) {
     return {
       success: false,
@@ -79,18 +69,14 @@ export async function createBlockedSlot(
     };
   }
 
-  // Check overlap with bookings (pending/confirmed only). We filter by
-  // start_hour < end and end_hour > start to catch any overlap on same court+date.
-  const { data: conflictingBookings, error: bookingsError } = await supabase
-    .from("bookings")
-    .select("id, start_hour, end_hour, status, walk_in_name")
-    .eq("court_id", court_id)
-    .eq("booking_date", slot_date)
-    .in("status", ["pending", "confirmed"])
-    .lt("start_hour", end_hour)
-    .gt("end_hour", start_hour);
-  if (bookingsError) return { success: false, error: bookingsError.message };
-  if (conflictingBookings && conflictingBookings.length > 0) {
+  // Check overlap with bookings (pending/confirmed only) on same court+date.
+  const conflictingBookings = await listOverlappingBookings({
+    courtId: court_id,
+    date: slot_date,
+    startHour: start_hour,
+    endHour: end_hour,
+  });
+  if (conflictingBookings.length > 0) {
     const ranges = conflictingBookings
       .map((b) => formatRange(b.start_hour, b.end_hour))
       .join(", ");
@@ -101,15 +87,13 @@ export async function createBlockedSlot(
   }
 
   // Check overlap with existing blocked slots on same court+date.
-  const { data: conflictingBlocks, error: blocksError } = await supabase
-    .from("blocked_slots")
-    .select("id, start_hour, end_hour")
-    .eq("court_id", court_id)
-    .eq("slot_date", slot_date)
-    .lt("start_hour", end_hour)
-    .gt("end_hour", start_hour);
-  if (blocksError) return { success: false, error: blocksError.message };
-  if (conflictingBlocks && conflictingBlocks.length > 0) {
+  const conflictingBlocks = await listOverlappingBlocks({
+    courtId: court_id,
+    date: slot_date,
+    startHour: start_hour,
+    endHour: end_hour,
+  });
+  if (conflictingBlocks.length > 0) {
     const ranges = conflictingBlocks
       .map((b) => formatRange(b.start_hour, b.end_hour))
       .join(", ");
@@ -125,20 +109,33 @@ export async function createBlockedSlot(
     start_hour,
     end_hour,
     reason: reason?.trim() ? reason.trim() : null,
-    created_by: user.id,
+    created_by: userId,
   });
-  if (insertError) return { success: false, error: insertError.message };
+  if (insertError) {
+    logError("blocked_slot.insert_failed", insertError, { court_id, slot_date });
+    return { success: false, error: "Couldn't create blocked slot." };
+  }
 
   revalidatePath("/admin/blocked-slots");
+  revalidatePath("/booking");
+  revalidatePath("/admin/schedule");
   return { success: true };
 }
 
 export async function deleteBlockedSlot(id: string): Promise<ActionResult> {
-  const supabase = await createClient();
+  const auth = await requireAdmin();
+  if (!auth.ok) return { success: false, error: auth.error };
+  const { supabase } = auth;
+
   const { error } = await supabase.from("blocked_slots").delete().eq("id", id);
-  if (error) return { success: false, error: error.message };
+  if (error) {
+    logError("blocked_slot.delete_failed", error, { id });
+    return { success: false, error: "Couldn't delete blocked slot." };
+  }
 
   revalidatePath("/admin/blocked-slots");
+  revalidatePath("/booking");
+  revalidatePath("/admin/schedule");
   return { success: true };
 }
 
@@ -149,17 +146,23 @@ export async function deleteBlockedSlots(
 ): Promise<BulkDeleteResult> {
   if (ids.length === 0) return { deletedCount: 0, failedCount: 0 };
 
-  const supabase = await createClient();
+  const auth = await requireAdmin();
+  if (!auth.ok) return { deletedCount: 0, failedCount: ids.length };
+  const { supabase } = auth;
+
   const { error, count } = await supabase
     .from("blocked_slots")
     .delete({ count: "exact" })
     .in("id", ids);
 
   if (error) {
+    logError("blocked_slot.bulk_delete_failed", error, { count: ids.length });
     return { deletedCount: 0, failedCount: ids.length };
   }
 
   revalidatePath("/admin/blocked-slots");
+  revalidatePath("/booking");
+  revalidatePath("/admin/schedule");
   const deletedCount = count ?? ids.length;
   return { deletedCount, failedCount: Math.max(0, ids.length - deletedCount) };
 }

@@ -2,10 +2,19 @@
 
 import { revalidatePath } from "next/cache";
 
+import { requireAdmin, type SimpleActionResult } from "@/lib/actions";
 import { logAuditEvent } from "@/lib/audit";
+import { getCourt } from "@/lib/data/courts";
+import { getFacilitySettings } from "@/lib/data/facility-settings";
+import {
+  getBookingForApprove,
+  getBookingForCancel,
+  getBookingForComplete,
+  getBookingForNotes,
+  getBookingForReschedule,
+} from "@/lib/data/bookings";
 import { logError } from "@/lib/logger";
 import { deleteBookingReceipt } from "@/lib/receipt";
-import { createClient } from "@/lib/supabase/server";
 import { formatHour, todayInFacility } from "@/lib/timezone";
 import { addDaysIso, BOOKING_DATE_MAX_DAYS } from "@/lib/zod-helpers";
 
@@ -33,30 +42,6 @@ type ActionOk = { success: true };
 type ActionErr = { success: false; error: string; slotTaken?: boolean };
 export type ActionResult = ActionOk | ActionErr;
 
-// Tiny wrapper so every admin action starts from the same admin-check and
-// bails with a consistent error. RLS would also block non-admin writes, but
-// the explicit check gives us an actionable error in the logs and short-
-// circuits before we hit the DB.
-async function requireAdmin(): Promise<
-  | { ok: true; userId: string; supabase: Awaited<ReturnType<typeof createClient>> }
-  | { ok: false; error: string }
-> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { ok: false, error: "Not authenticated." };
-  const { data: profile } = await supabase
-    .from("users")
-    .select("role")
-    .eq("id", user.id)
-    .maybeSingle();
-  if (profile?.role !== "admin") {
-    return { ok: false, error: "Admin access required." };
-  }
-  return { ok: true, userId: user.id, supabase };
-}
-
 // `admin_notes` doubles as the free-form reason log for reject/cancel. This
 // helper appends a timestamped entry so the trail is preserved across
 // multiple admin interventions without overwriting prior notes.
@@ -83,15 +68,9 @@ export async function approveBooking(
 ): Promise<ActionResult> {
   const auth = await requireAdmin();
   if (!auth.ok) return { success: false, error: auth.error };
-
   const { supabase, userId } = auth;
 
-  const { data: booking, error } = await supabase
-    .from("bookings")
-    .select("id, status, payment_receipt_url")
-    .eq("id", bookingId)
-    .maybeSingle();
-  if (error) return { success: false, error: error.message };
+  const booking = await getBookingForApprove(bookingId);
   if (!booking) return { success: false, error: "Booking not found." };
   if (booking.status !== "pending") {
     return { success: false, error: `Booking is already ${booking.status}.` };
@@ -111,7 +90,10 @@ export async function approveBooking(
       payment_receipt_url: null,
     })
     .eq("id", bookingId);
-  if (updateError) return { success: false, error: updateError.message };
+  if (updateError) {
+    logError("booking.approve_failed", updateError, { bookingId });
+    return { success: false, error: "Couldn't approve booking." };
+  }
 
   await deleteBookingReceipt(booking.payment_receipt_url);
   await logAuditEvent("booking.approved", {
@@ -139,12 +121,7 @@ export async function rejectBooking(
   if (!auth.ok) return { success: false, error: auth.error };
   const { supabase, userId } = auth;
 
-  const { data: booking, error } = await supabase
-    .from("bookings")
-    .select("id, status, payment_receipt_url, admin_notes")
-    .eq("id", bookingId)
-    .maybeSingle();
-  if (error) return { success: false, error: error.message };
+  const booking = await getBookingForCancel(bookingId);
   if (!booking) return { success: false, error: "Booking not found." };
   if (booking.status !== "pending") {
     return { success: false, error: `Booking is already ${booking.status}.` };
@@ -164,7 +141,10 @@ export async function rejectBooking(
       admin_notes: note,
     })
     .eq("id", bookingId);
-  if (updateError) return { success: false, error: updateError.message };
+  if (updateError) {
+    logError("booking.reject_failed", updateError, { bookingId });
+    return { success: false, error: "Couldn't reject booking." };
+  }
 
   await deleteBookingReceipt(booking.payment_receipt_url);
   await logAuditEvent("booking.rejected", {
@@ -195,12 +175,7 @@ export async function rescheduleBooking(
   const { court_id, booking_date, start_hour, duration_hours } = parsed.data;
   const end_hour = start_hour + duration_hours;
 
-  const { data: booking, error } = await supabase
-    .from("bookings")
-    .select("id, status, court_id, booking_date, start_hour, end_hour")
-    .eq("id", bookingId)
-    .maybeSingle();
-  if (error) return { success: false, error: error.message };
+  const booking = await getBookingForReschedule(bookingId);
   if (!booking) return { success: false, error: "Booking not found." };
   if (booking.status !== "pending" && booking.status !== "confirmed") {
     return {
@@ -220,48 +195,35 @@ export async function rescheduleBooking(
     };
   }
 
-  const [{ data: court, error: courtError }, { data: settings }] =
-    await Promise.all([
-      supabase
-        .from("courts")
-        .select("id, is_active, hourly_rate")
-        .eq("id", court_id)
-        .maybeSingle(),
-      supabase
-        .from("facility_settings")
-        .select(
-          "operating_hours_start, operating_hours_end, max_booking_duration_hours",
-        )
-        .eq("id", 1)
-        .maybeSingle(),
-    ]);
+  const [court, settings] = await Promise.all([
+    getCourt(court_id),
+    getFacilitySettings(),
+  ]);
 
-  if (courtError) return { success: false, error: courtError.message };
   if (!court) return { success: false, error: "Court not found." };
   if (!court.is_active) {
     return { success: false, error: "Court is not active." };
   }
 
-  const opStart = settings?.operating_hours_start ?? 8;
-  const opEnd = settings?.operating_hours_end ?? 22;
-  const maxDuration = settings?.max_booking_duration_hours ?? 5;
-
-  if (duration_hours > maxDuration) {
+  if (duration_hours > settings.max_booking_duration_hours) {
     return {
       success: false,
-      error: `Duration exceeds the ${maxDuration}-hour maximum.`,
+      error: `Duration exceeds the ${settings.max_booking_duration_hours}-hour maximum.`,
     };
   }
-  if (start_hour < opStart || start_hour >= opEnd) {
+  if (
+    start_hour < settings.operating_hours_start ||
+    start_hour >= settings.operating_hours_end
+  ) {
     return {
       success: false,
-      error: `Start time must be between ${formatHour(opStart)} and ${formatHour(opEnd)}.`,
+      error: `Start time must be between ${formatHour(settings.operating_hours_start)} and ${formatHour(settings.operating_hours_end)}.`,
     };
   }
-  if (end_hour > opEnd) {
+  if (end_hour > settings.operating_hours_end) {
     return {
       success: false,
-      error: `Booking must end by ${formatHour(opEnd)}.`,
+      error: `Booking must end by ${formatHour(settings.operating_hours_end)}.`,
     };
   }
 
@@ -282,7 +244,8 @@ export async function rescheduleBooking(
     if (updateError.code === EXCLUSION_VIOLATION) {
       return { success: false, error: SLOT_TAKEN_ERROR, slotTaken: true };
     }
-    return { success: false, error: updateError.message };
+    logError("booking.reschedule_failed", updateError, { bookingId });
+    return { success: false, error: "Couldn't reschedule booking." };
   }
 
   await logAuditEvent("booking.rescheduled", {
@@ -319,12 +282,7 @@ export async function cancelBooking(
   if (!auth.ok) return { success: false, error: auth.error };
   const { supabase, userId } = auth;
 
-  const { data: booking, error } = await supabase
-    .from("bookings")
-    .select("id, status, payment_receipt_url, admin_notes")
-    .eq("id", bookingId)
-    .maybeSingle();
-  if (error) return { success: false, error: error.message };
+  const booking = await getBookingForCancel(bookingId);
   if (!booking) return { success: false, error: "Booking not found." };
   if (booking.status !== "pending" && booking.status !== "confirmed") {
     return {
@@ -347,7 +305,10 @@ export async function cancelBooking(
       admin_notes: note,
     })
     .eq("id", bookingId);
-  if (updateError) return { success: false, error: updateError.message };
+  if (updateError) {
+    logError("booking.cancel_failed", updateError, { bookingId });
+    return { success: false, error: "Couldn't cancel booking." };
+  }
 
   await deleteBookingReceipt(booking.payment_receipt_url);
   await logAuditEvent("booking.cancelled", {
@@ -372,12 +333,7 @@ export async function completeBooking(
   if (!auth.ok) return { success: false, error: auth.error };
   const { supabase, userId } = auth;
 
-  const { data: booking, error } = await supabase
-    .from("bookings")
-    .select("id, status, booking_date")
-    .eq("id", bookingId)
-    .maybeSingle();
-  if (error) return { success: false, error: error.message };
+  const booking = await getBookingForComplete(bookingId);
   if (!booking) return { success: false, error: "Booking not found." };
   if (booking.status !== "confirmed") {
     return {
@@ -398,7 +354,10 @@ export async function completeBooking(
     .from("bookings")
     .update({ status: "completed" })
     .eq("id", bookingId);
-  if (updateError) return { success: false, error: updateError.message };
+  if (updateError) {
+    logError("booking.complete_failed", updateError, { bookingId });
+    return { success: false, error: "Couldn't mark booking completed." };
+  }
 
   await logAuditEvent("booking.completed", {
     actorUserId: userId,
@@ -415,7 +374,7 @@ export async function completeBooking(
 export async function saveBookingNotes(
   bookingId: string,
   values: NotesValues,
-): Promise<ActionResult> {
+): Promise<SimpleActionResult> {
   const parsed = notesSchema.safeParse(values);
   if (!parsed.success) {
     return { success: false, error: parsed.error.issues[0].message };
@@ -426,12 +385,7 @@ export async function saveBookingNotes(
   const { supabase, userId } = auth;
 
   const notes = parsed.data.notes.trim();
-  const { data: booking, error: fetchError } = await supabase
-    .from("bookings")
-    .select("id, admin_notes")
-    .eq("id", bookingId)
-    .maybeSingle();
-  if (fetchError) return { success: false, error: fetchError.message };
+  const booking = await getBookingForNotes(bookingId);
   if (!booking) return { success: false, error: "Booking not found." };
 
   // Skip audit + revalidate when the text hasn't actually changed — autosave
@@ -445,7 +399,10 @@ export async function saveBookingNotes(
     .from("bookings")
     .update({ admin_notes: notes.length === 0 ? null : notes })
     .eq("id", bookingId);
-  if (updateError) return { success: false, error: updateError.message };
+  if (updateError) {
+    logError("booking.notes_save_failed", updateError, { bookingId });
+    return { success: false, error: "Couldn't save notes." };
+  }
 
   await logAuditEvent("booking.note_updated", {
     actorUserId: userId,
@@ -489,48 +446,35 @@ export async function createWalkinBooking(
     };
   }
 
-  const [{ data: court, error: courtError }, { data: settings }] =
-    await Promise.all([
-      supabase
-        .from("courts")
-        .select("id, is_active, hourly_rate")
-        .eq("id", court_id)
-        .maybeSingle(),
-      supabase
-        .from("facility_settings")
-        .select(
-          "operating_hours_start, operating_hours_end, max_booking_duration_hours",
-        )
-        .eq("id", 1)
-        .maybeSingle(),
-    ]);
+  const [court, settings] = await Promise.all([
+    getCourt(court_id),
+    getFacilitySettings(),
+  ]);
 
-  if (courtError) return { success: false, error: courtError.message };
   if (!court) return { success: false, error: "Court not found." };
   if (!court.is_active) {
     return { success: false, error: "Court is not active." };
   }
 
-  const opStart = settings?.operating_hours_start ?? 8;
-  const opEnd = settings?.operating_hours_end ?? 22;
-  const maxDuration = settings?.max_booking_duration_hours ?? 5;
-
-  if (duration_hours > maxDuration) {
+  if (duration_hours > settings.max_booking_duration_hours) {
     return {
       success: false,
-      error: `Duration exceeds the ${maxDuration}-hour maximum.`,
+      error: `Duration exceeds the ${settings.max_booking_duration_hours}-hour maximum.`,
     };
   }
-  if (start_hour < opStart || start_hour >= opEnd) {
+  if (
+    start_hour < settings.operating_hours_start ||
+    start_hour >= settings.operating_hours_end
+  ) {
     return {
       success: false,
-      error: `Start time must be between ${formatHour(opStart)} and ${formatHour(opEnd)}.`,
+      error: `Start time must be between ${formatHour(settings.operating_hours_start)} and ${formatHour(settings.operating_hours_end)}.`,
     };
   }
-  if (end_hour > opEnd) {
+  if (end_hour > settings.operating_hours_end) {
     return {
       success: false,
-      error: `Booking must end by ${formatHour(opEnd)}.`,
+      error: `Booking must end by ${formatHour(settings.operating_hours_end)}.`,
     };
   }
 
@@ -563,7 +507,7 @@ export async function createWalkinBooking(
       };
     }
     logError("booking.walkin_insert_failed", insertError, { court_id });
-    return { success: false, error: insertError.message };
+    return { success: false, error: "Couldn't create walk-in booking." };
   }
 
   await logAuditEvent("booking.walkin_created", {

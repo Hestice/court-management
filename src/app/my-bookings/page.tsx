@@ -1,3 +1,6 @@
+import { redirect } from "next/navigation";
+
+import { listBookingsForUser } from "@/lib/data/bookings";
 import { createClient } from "@/lib/supabase/server";
 import { todayInFacility } from "@/lib/timezone";
 
@@ -5,44 +8,18 @@ import { MyBookingsView, type MyBookingRow } from "./my-bookings-view";
 
 export const metadata = { title: "My Bookings" };
 
-type BookingWithCourt = {
-  id: string;
-  booking_date: string;
-  start_hour: number;
-  end_hour: number;
-  status: string;
-  total_amount: number;
-  expires_at: string | null;
-  created_at: string;
-  payment_receipt_url: string | null;
-  court: { name: string } | null;
-};
-
 export default async function MyBookingsPage() {
   const supabase = await createClient();
-
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  // Middleware redirects unauthenticated users; user here is guaranteed.
-  if (!user) return null;
+  // Middleware redirects unauthenticated users; this is belt-and-braces in
+  // case the page is rendered in a context where middleware didn't run.
+  if (!user) redirect("/login?next=/my-bookings");
 
-  const { data, error } = await supabase
-    .from("bookings")
-    .select(
-      "id, booking_date, start_hour, end_hour, status, total_amount, expires_at, created_at, payment_receipt_url, court:courts!bookings_court_id_fkey(name)",
-    )
-    .eq("user_id", user.id)
-    .order("booking_date", { ascending: false })
-    .order("start_hour", { ascending: false });
+  const bookings = await listBookingsForUser(user.id);
 
-  if (error) {
-    throw new Error(`Failed to load bookings: ${error.message}`);
-  }
-
-  const rows: MyBookingRow[] = (
-    (data ?? []) as unknown as BookingWithCourt[]
-  ).map((b) => ({
+  const rows: MyBookingRow[] = bookings.map((b) => ({
     id: b.id,
     court_name: b.court?.name ?? "—",
     booking_date: b.booking_date,

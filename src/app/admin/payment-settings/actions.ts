@@ -2,13 +2,19 @@
 
 import { revalidatePath } from "next/cache";
 
+import { requireAdmin } from "@/lib/actions";
+import {
+  getMaxPaymentMethodDisplayOrder,
+  getPaymentMethod,
+  listPaymentMethodIds,
+  QR_BUCKET,
+} from "@/lib/data/payment-methods";
 import { convertToWebp, QR_CONVERT_DEFAULTS } from "@/lib/image-convert";
 import {
   isAcceptedScreenshotMime,
   SERVER_CONVERTED_MAX_BYTES,
 } from "@/lib/upload-validation";
 import { logError } from "@/lib/logger";
-import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import {
   paymentMethodFormSchema,
@@ -19,7 +25,6 @@ export type ActionResult =
   | { success: true; id?: string }
   | { success: false; error: string };
 
-const QR_BUCKET = "payment-qrs";
 const QR_FILENAME = "qr.webp";
 
 // Admin-only FormData path: converts the uploaded QR (any accepted screenshot
@@ -117,18 +122,13 @@ export async function createPaymentMethod(
   const { values, error } = parseFormFields(formData);
   if (!values) return { success: false, error: error ?? "Invalid input." };
 
-  const supabase = await createClient();
+  const auth = await requireAdmin();
+  if (!auth.ok) return { success: false, error: auth.error };
+  const { supabase } = auth;
 
   // Highest display_order + 1 keeps new methods at the bottom of the list
   // without disturbing admin's existing order.
-  const { data: last, error: lastError } = await supabase
-    .from("payment_methods")
-    .select("display_order")
-    .order("display_order", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (lastError) return { success: false, error: lastError.message };
-  const nextOrder = (last?.display_order ?? -1) + 1;
+  const nextOrder = (await getMaxPaymentMethodDisplayOrder()) + 1;
 
   const { data: inserted, error: insertError } = await supabase
     .from("payment_methods")
@@ -140,7 +140,10 @@ export async function createPaymentMethod(
     })
     .select("id")
     .single();
-  if (insertError) return { success: false, error: insertError.message };
+  if (insertError) {
+    logError("payment_methods.insert_failed", insertError);
+    return { success: false, error: "Couldn't create payment method." };
+  }
 
   const file = getOptionalFile(formData, "qr_file");
   if (file) {
@@ -155,13 +158,17 @@ export async function createPaymentMethod(
       .update({ qr_image_url: result.path })
       .eq("id", inserted.id);
     if (updateError) {
+      logError("payment_methods.qr_link_failed", updateError, {
+        methodId: inserted.id,
+      });
       await deleteQrFile(result.path);
       await supabase.from("payment_methods").delete().eq("id", inserted.id);
-      return { success: false, error: updateError.message };
+      return { success: false, error: "Couldn't save QR reference." };
     }
   }
 
   revalidatePath("/admin/payment-settings");
+  revalidatePath("/payment", "layout");
   return { success: true, id: inserted.id };
 }
 
@@ -172,16 +179,13 @@ export async function updatePaymentMethod(
   const { values, error } = parseFormFields(formData);
   if (!values) return { success: false, error: error ?? "Invalid input." };
 
-  const supabase = await createClient();
+  const auth = await requireAdmin();
+  if (!auth.ok) return { success: false, error: auth.error };
+  const { supabase } = auth;
 
   // Need the existing row so we know the previous QR path if the admin is
   // replacing or removing it.
-  const { data: existing, error: fetchError } = await supabase
-    .from("payment_methods")
-    .select("id, qr_image_url")
-    .eq("id", id)
-    .maybeSingle();
-  if (fetchError) return { success: false, error: fetchError.message };
+  const existing = await getPaymentMethod(id);
   if (!existing) return { success: false, error: "Payment method not found." };
 
   const removeQr = formData.get("remove_qr") === "true";
@@ -207,7 +211,10 @@ export async function updatePaymentMethod(
       ...(nextQrPath !== undefined ? { qr_image_url: nextQrPath } : {}),
     })
     .eq("id", id);
-  if (updateError) return { success: false, error: updateError.message };
+  if (updateError) {
+    logError("payment_methods.update_failed", updateError, { id });
+    return { success: false, error: "Couldn't update payment method." };
+  }
 
   revalidatePath("/admin/payment-settings");
   revalidatePath("/payment", "layout");
@@ -215,16 +222,17 @@ export async function updatePaymentMethod(
 }
 
 export async function deletePaymentMethod(id: string): Promise<ActionResult> {
-  const supabase = await createClient();
+  const auth = await requireAdmin();
+  if (!auth.ok) return { success: false, error: auth.error };
+  const { supabase } = auth;
 
-  const { data: existing } = await supabase
-    .from("payment_methods")
-    .select("qr_image_url")
-    .eq("id", id)
-    .maybeSingle();
+  const existing = await getPaymentMethod(id);
 
   const { error } = await supabase.from("payment_methods").delete().eq("id", id);
-  if (error) return { success: false, error: error.message };
+  if (error) {
+    logError("payment_methods.delete_failed", error, { id });
+    return { success: false, error: "Couldn't delete payment method." };
+  }
 
   if (existing?.qr_image_url) {
     await deleteQrFile(existing.qr_image_url);
@@ -243,20 +251,17 @@ export async function reorderPaymentMethods(
 ): Promise<ActionResult> {
   if (ids.length === 0) return { success: true };
 
-  const supabase = await createClient();
+  const auth = await requireAdmin();
+  if (!auth.ok) return { success: false, error: auth.error };
+  const { supabase } = auth;
 
-  // Verify the caller is admin and the IDs match existing rows. Without this,
-  // a client with admin auth could still submit an incomplete list and
-  // silently drop methods off the end of the ordering.
-  const { data: rows, error: fetchError } = await supabase
-    .from("payment_methods")
-    .select("id");
-  if (fetchError) return { success: false, error: fetchError.message };
-
-  const existingIds = new Set((rows ?? []).map((r) => r.id));
+  // Verify the IDs match existing rows. Without this, a client could submit
+  // an incomplete list and silently drop methods off the end of the ordering.
+  const existingIds = await listPaymentMethodIds();
+  const existingSet = new Set(existingIds);
   if (
-    ids.length !== existingIds.size ||
-    !ids.every((id) => existingIds.has(id))
+    ids.length !== existingSet.size ||
+    !ids.every((id) => existingSet.has(id))
   ) {
     return {
       success: false,
@@ -271,7 +276,10 @@ export async function reorderPaymentMethods(
       .from("payment_methods")
       .update({ display_order: i })
       .eq("id", ids[i]);
-    if (error) return { success: false, error: error.message };
+    if (error) {
+      logError("payment_methods.reorder_failed", error, { id: ids[i] });
+      return { success: false, error: "Couldn't save order." };
+    }
   }
 
   revalidatePath("/admin/payment-settings");

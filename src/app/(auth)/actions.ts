@@ -2,13 +2,15 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { createClient } from "@/lib/supabase/server";
+
 import { logAuditEvent } from "@/lib/audit";
+import { getUserRole } from "@/lib/data/users";
 import {
   checkPreset,
   formatRetryAfter,
   getRequestIp,
 } from "@/lib/rate-limit";
+import { createClient } from "@/lib/supabase/server";
 
 export type AuthResult = { error?: string } | void;
 
@@ -45,12 +47,8 @@ export async function login(_prev: AuthResult, formData: FormData): Promise<Auth
 
   let redirectTo = next && next.startsWith("/") ? next : "/";
   if (user && !next) {
-    const { data: profile } = await supabase
-      .from("users")
-      .select("role")
-      .eq("id", user.id)
-      .maybeSingle();
-    if (profile?.role === "admin") {
+    const role = await getUserRole(user.id);
+    if (role === "admin") {
       redirectTo = "/admin";
     }
   }
