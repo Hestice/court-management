@@ -1,6 +1,9 @@
 import { redirect } from "next/navigation";
 
-import { listBookingsForUser } from "@/lib/data/bookings";
+import {
+  listBookingGuestsForBooking,
+  listBookingsForUser,
+} from "@/lib/data/bookings";
 import { createClient } from "@/lib/supabase/server";
 import { todayInFacility } from "@/lib/timezone";
 
@@ -13,11 +16,24 @@ export default async function MyBookingsPage() {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  // Middleware redirects unauthenticated users; this is belt-and-braces in
-  // case the page is rendered in a context where middleware didn't run.
+  // Middleware redirects unauthenticated users; belt-and-braces for contexts
+  // where middleware didn't run.
   if (!user) redirect("/login?next=/my-bookings");
 
   const bookings = await listBookingsForUser(user.id);
+
+  // Only fetch guest QR rows for confirmed bookings — those are the only ones
+  // where QRs render in the UI. Keeps the per-row trip count bounded.
+  const confirmed = bookings.filter((b) => b.status === "confirmed");
+  const guestsByBooking = new Map<
+    string,
+    Awaited<ReturnType<typeof listBookingGuestsForBooking>>
+  >();
+  await Promise.all(
+    confirmed.map(async (b) => {
+      guestsByBooking.set(b.id, await listBookingGuestsForBooking(b.id));
+    }),
+  );
 
   const rows: MyBookingRow[] = bookings.map((b) => ({
     id: b.id,
@@ -27,8 +43,15 @@ export default async function MyBookingsPage() {
     end_hour: b.end_hour,
     status: b.status,
     total_amount: Number(b.total_amount),
+    guest_count: b.guest_count,
     expires_at: b.expires_at,
     has_receipt: !!b.payment_receipt_url,
+    guests: (guestsByBooking.get(b.id) ?? []).map((g) => ({
+      id: g.id,
+      guest_number: g.guest_number,
+      qr_code: g.qr_code,
+      redeemed_at: g.redeemed_at,
+    })),
   }));
 
   return (

@@ -31,6 +31,7 @@ export default async function BookingPage() {
         operatingStart={settings.operating_hours_start}
         operatingEnd={settings.operating_hours_end}
         maxDuration={settings.max_booking_duration_hours}
+        entrancePricePerGuest={settings.entrance_pass_price_per_guest}
       />
     </main>
   );

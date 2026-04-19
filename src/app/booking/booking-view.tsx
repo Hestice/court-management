@@ -13,6 +13,7 @@ import {
   formatHourRange,
 } from "@/lib/timezone";
 import { cn } from "@/lib/utils";
+import { GUEST_COUNT_MAX, GUEST_COUNT_MIN } from "@/lib/zod-helpers";
 
 import { loadAvailability } from "./availability-action";
 import { createBooking } from "./actions";
@@ -55,6 +56,7 @@ export function BookingView({
   operatingStart,
   operatingEnd,
   maxDuration,
+  entrancePricePerGuest,
 }: {
   today: string;
   initialDate: string;
@@ -62,6 +64,7 @@ export function BookingView({
   operatingStart: number;
   operatingEnd: number;
   maxDuration: number;
+  entrancePricePerGuest: number;
 }) {
   const [selectedDate, setSelectedDate] = useState(initialDate);
   const [availability, setAvailability] =
@@ -73,6 +76,7 @@ export function BookingView({
     operatingStart,
   );
   const [selectedDuration, setSelectedDuration] = useState<number>(1);
+  const [guestCount, setGuestCount] = useState<number>(1);
   const [loading, startLoadTransition] = useTransition();
   const [submitting, startSubmitTransition] = useTransition();
   const router = useRouter();
@@ -165,14 +169,21 @@ export function BookingView({
     });
   }
 
+  const safeGuestCount = Math.min(
+    Math.max(Number.isFinite(guestCount) ? guestCount : 0, 0),
+    GUEST_COUNT_MAX,
+  );
+
   function handleSubmit() {
     if (!selectedCourtId || effectiveDuration === 0) return;
+    if (safeGuestCount < GUEST_COUNT_MIN) return;
     startSubmitTransition(async () => {
       const result = await createBooking({
         court_id: selectedCourtId,
         booking_date: selectedDate,
         start_hour: selectedStartHour,
         duration_hours: effectiveDuration,
+        guest_count: safeGuestCount,
       });
       if (result.success) {
         router.push(`/payment/${result.bookingId}`);
@@ -187,10 +198,12 @@ export function BookingView({
   // disabled below when that hour isn't 'available' on the selected court.
   const startHourOptions = hoursInRange;
 
-  const totalAmount =
+  const courtRentalTotal =
     selectedCourt && effectiveDuration > 0
       ? selectedCourt.court.hourly_rate * effectiveDuration
       : 0;
+  const entranceTotal = entrancePricePerGuest * safeGuestCount;
+  const totalAmount = courtRentalTotal + entranceTotal;
   const summaryEndHour = selectedStartHour + effectiveDuration;
 
   return (
@@ -315,20 +328,63 @@ export function BookingView({
           ) : null}
         </div>
 
+        <div className="flex flex-col gap-1">
+          <label htmlFor="booking-guests" className="text-sm font-medium">
+            Number of people
+          </label>
+          <Input
+            id="booking-guests"
+            type="number"
+            inputMode="numeric"
+            min={GUEST_COUNT_MIN}
+            max={GUEST_COUNT_MAX}
+            step={1}
+            value={Number.isFinite(guestCount) ? guestCount : ""}
+            onChange={(e) => {
+              const n = e.target.valueAsNumber;
+              setGuestCount(Number.isFinite(n) ? Math.floor(n) : 0);
+            }}
+            disabled={submitting}
+          />
+          <p className="text-xs text-muted-foreground">
+            Each person pays {formatPHP(entrancePricePerGuest)} for facility
+            entry.
+          </p>
+        </div>
+
         <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
           {selectedCourt && effectiveDuration > 0 ? (
-            <div className="flex flex-col gap-1">
-              <p>
-                <span className="font-medium">{selectedCourt.court.name}</span>
-                {" · "}
-                {formatFacilityDate(selectedDate)}
-              </p>
-              <p className="text-muted-foreground">
-                {formatHourRange(selectedStartHour, summaryEndHour)} (
-                {effectiveDuration}{" "}
-                {effectiveDuration === 1 ? "hour" : "hours"})
-              </p>
-              <p className="font-semibold">{formatPHP(totalAmount)}</p>
+            <div className="flex flex-col gap-2">
+              <div className="flex flex-col gap-1">
+                <p>
+                  <span className="font-medium">
+                    {selectedCourt.court.name}
+                  </span>
+                  {" · "}
+                  {formatFacilityDate(selectedDate)}
+                </p>
+                <p className="text-muted-foreground">
+                  {formatHourRange(selectedStartHour, summaryEndHour)} (
+                  {effectiveDuration}{" "}
+                  {effectiveDuration === 1 ? "hour" : "hours"})
+                </p>
+              </div>
+              <div className="flex flex-col gap-1 border-t border-border pt-2 text-xs">
+                <SummaryLine
+                  label={`Court rental: ${formatPHP(selectedCourt.court.hourly_rate)}/hr × ${effectiveDuration}`}
+                  value={formatPHP(courtRentalTotal)}
+                />
+                <SummaryLine
+                  label={`Entrance: ${formatPHP(entrancePricePerGuest)}/person × ${safeGuestCount}`}
+                  value={formatPHP(entranceTotal)}
+                />
+              </div>
+              <div className="flex items-center justify-between border-t border-border pt-2">
+                <span className="font-medium">Total</span>
+                <span className="text-base font-semibold tabular-nums">
+                  {formatPHP(totalAmount)}
+                </span>
+              </div>
             </div>
           ) : (
             <p className="text-muted-foreground">
@@ -343,15 +399,26 @@ export function BookingView({
             submitting ||
             loading ||
             !selectedCourtId ||
-            effectiveDuration === 0
+            effectiveDuration === 0 ||
+            safeGuestCount < GUEST_COUNT_MIN
           }
         >
           {submitting ? "Reserving…" : "Reserve"}
         </Button>
         <p className="text-xs text-muted-foreground">
-          Your booking stays pending until an admin confirms your payment.
+          Your booking stays pending until an admin confirms your payment. QR
+          codes for each guest appear in My Bookings after confirmation.
         </p>
       </aside>
+    </div>
+  );
+}
+
+function SummaryLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="tabular-nums">{value}</span>
     </div>
   );
 }
