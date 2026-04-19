@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
+import { logAuditEvent } from "@/lib/audit";
 import {
   checkPreset,
   formatRetryAfter,
@@ -41,6 +42,10 @@ export async function createBooking(
 
   const rate = await checkPreset("bookingSubmit", user.id);
   if (!rate.allowed) {
+    await logAuditEvent("rate_limit.hit", {
+      actorUserId: user.id,
+      metadata: { preset: "bookingSubmit" },
+    });
     return {
       success: false,
       error: `You've hit the booking rate limit. ${formatRetryAfter(rate.retryAfterSeconds)}`,
