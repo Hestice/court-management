@@ -16,6 +16,7 @@ export default async function AdminSettingsPage() {
     contact_phone: settings.contact_phone ?? "",
     pending_expiry_hours: settings.pending_expiry_hours,
     max_booking_duration_hours: settings.max_booking_duration_hours,
+    entrance_pass_price_per_guest: settings.entrance_pass_price_per_guest,
   };
 
   return (

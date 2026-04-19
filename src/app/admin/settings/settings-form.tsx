@@ -204,6 +204,35 @@ export function SettingsForm({ defaults }: { defaults: FacilitySettingsValues })
           />
         </div>
 
+        <FormField
+          control={form.control}
+          name="entrance_pass_price_per_guest"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Entrance pass price per guest (₱)</FormLabel>
+              <FormControl>
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  min={0}
+                  step="0.01"
+                  {...field}
+                  onChange={(e) =>
+                    field.onChange(
+                      e.target.value === "" ? 0 : e.target.valueAsNumber,
+                    )
+                  }
+                  value={Number.isFinite(field.value) ? field.value : ""}
+                />
+              </FormControl>
+              <FormDescription>
+                Charged per guest on an entrance pass purchase.
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
         <div className="flex justify-end">
           <Button type="submit" disabled={pending || !form.formState.isDirty}>
             {pending ? "Saving…" : "Save settings"}

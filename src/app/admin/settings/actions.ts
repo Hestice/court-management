@@ -34,6 +34,7 @@ export async function updateFacilitySettings(
       contact_phone: parsed.data.contact_phone?.trim() || null,
       pending_expiry_hours: parsed.data.pending_expiry_hours,
       max_booking_duration_hours: parsed.data.max_booking_duration_hours,
+      entrance_pass_price_per_guest: parsed.data.entrance_pass_price_per_guest,
       updated_at: new Date().toISOString(),
     })
     .eq("id", 1);

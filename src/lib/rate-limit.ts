@@ -18,6 +18,7 @@ export const RATE_LIMITS = {
   login: { limit: 5, windowSeconds: 10 * 60 },
   register: { limit: 3, windowSeconds: 60 * 60 },
   bookingSubmit: { limit: 10, windowSeconds: 60 * 60 },
+  passSubmit: { limit: 10, windowSeconds: 60 * 60 },
   contact: { limit: 3, windowSeconds: 60 * 60 },
   fileUpload: { limit: 20, windowSeconds: 60 * 60 },
 } as const;

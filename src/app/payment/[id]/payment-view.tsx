@@ -27,14 +27,23 @@ export type PaymentMethodForCustomer = {
   qr_public_url: string | null;
 };
 
-type BookingSummary = {
-  court: string;
-  date: string;
-  startHour: number;
-  endHour: number;
-  totalAmount: number;
-  status: string;
-};
+export type PaymentSummary =
+  | {
+      kind: "booking";
+      court: string;
+      date: string;
+      startHour: number;
+      endHour: number;
+      totalAmount: number;
+      status: string;
+    }
+  | {
+      kind: "pass";
+      date: string;
+      guestCount: number;
+      totalAmount: number;
+      status: string;
+    };
 
 function formatPHP(amount: number): string {
   return new Intl.NumberFormat("en-PH", {
@@ -45,14 +54,16 @@ function formatPHP(amount: number): string {
 }
 
 export function PaymentView({
-  bookingId,
+  kind,
+  entityId,
   summary,
   methods,
   initialReceipt,
   isAdminViewer,
 }: {
-  bookingId: string;
-  summary: BookingSummary;
+  kind: "booking" | "pass";
+  entityId: string;
+  summary: PaymentSummary;
   methods: PaymentMethodForCustomer[];
   initialReceipt: { path: string; signedUrl: string | null } | null;
   isAdminViewer: boolean;
@@ -66,6 +77,8 @@ export function PaymentView({
   const [dragging, setDragging] = useState(false);
 
   const canUpload = !isAdminViewer && summary.status === "pending";
+  const listHref = kind === "pass" ? "/my-passes" : "/my-bookings";
+  const listLabel = kind === "pass" ? "View my passes" : "View my bookings";
 
   function submitFile(file: File) {
     if (!isAcceptedScreenshotMime(file.type)) {
@@ -81,7 +94,7 @@ export function PaymentView({
     formData.set("file", file);
 
     startTransition(async () => {
-      const result = await uploadReceipt(bookingId, formData);
+      const result = await uploadReceipt(kind, entityId, formData);
       if (result.success) {
         setReceipt({ path: result.path, signedUrl: result.signedUrl });
         toast.success("Receipt uploaded");
@@ -127,19 +140,34 @@ export function PaymentView({
             id="summary-heading"
             className="text-sm font-medium text-muted-foreground"
           >
-            Booking summary
+            {summary.kind === "pass" ? "Entrance pass" : "Booking summary"}
           </h2>
           <StatusBadge status={summary.status} />
         </div>
-        <SummaryRow label="Court" value={summary.court} />
-        <SummaryRow
-          label="Date"
-          value={formatFacilityDate(summary.date)}
-        />
-        <SummaryRow
-          label="Time"
-          value={formatHourRange(summary.startHour, summary.endHour)}
-        />
+        {summary.kind === "booking" ? (
+          <>
+            <SummaryRow label="Court" value={summary.court} />
+            <SummaryRow
+              label="Date"
+              value={formatFacilityDate(summary.date)}
+            />
+            <SummaryRow
+              label="Time"
+              value={formatHourRange(summary.startHour, summary.endHour)}
+            />
+          </>
+        ) : (
+          <>
+            <SummaryRow
+              label="Date"
+              value={formatFacilityDate(summary.date)}
+            />
+            <SummaryRow
+              label="Guests"
+              value={`${summary.guestCount} ${summary.guestCount === 1 ? "guest" : "guests"}`}
+            />
+          </>
+        )}
         <SummaryRow
           label="Total"
           value={formatPHP(summary.totalAmount)}
@@ -164,10 +192,6 @@ export function PaymentView({
                 className="flex flex-col gap-4 rounded-lg border border-border p-4 sm:flex-row sm:items-start"
               >
                 {method.qr_public_url ? (
-                  // Branded QRs (GCash/Maya/bank exports) often embed header
-                  // text, logos, and account details directly in the image.
-                  // Render at natural aspect up to a generous max size so the
-                  // scan code and the surrounding details both stay legible.
                   <a
                     href={method.qr_public_url}
                     target="_blank"
@@ -209,11 +233,12 @@ export function PaymentView({
         {isAdminViewer ? (
           <div className="rounded-lg border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
             Admin view — uploading is only available to the customer who made
-            the booking.
+            the {kind === "pass" ? "purchase" : "booking"}.
           </div>
         ) : summary.status !== "pending" ? (
           <div className="rounded-lg border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
-            Your booking is {summary.status}. Upload is no longer available.
+            Your {kind === "pass" ? "pass" : "booking"} is {summary.status}.
+            Upload is no longer available.
           </div>
         ) : (
           <>
@@ -286,8 +311,8 @@ export function PaymentView({
             </label>
 
             <p className="rounded-md bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
-              Your booking is pending admin review. You&apos;ll receive an email
-              once confirmed.
+              Your {kind === "pass" ? "pass" : "booking"} is pending admin
+              review. You&apos;ll receive an email once confirmed.
             </p>
           </>
         )}
@@ -295,7 +320,7 @@ export function PaymentView({
 
       <div className="flex gap-3">
         <Button asChild variant="ghost">
-          <Link href="/my-bookings">View my bookings</Link>
+          <Link href={listHref}>{listLabel}</Link>
         </Button>
       </div>
     </>
@@ -330,6 +355,7 @@ function StatusBadge({ status }: { status: string }) {
     confirmed:
       "border-emerald-300 bg-emerald-100 text-emerald-900 dark:border-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200",
     cancelled: "border-destructive/40 bg-destructive/10 text-destructive",
+    expired: "border-destructive/40 bg-destructive/10 text-destructive",
     completed: "",
   };
   return (

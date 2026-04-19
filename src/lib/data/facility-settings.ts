@@ -18,6 +18,7 @@ export type FacilitySettings = {
   contact_phone: string | null;
   pending_expiry_hours: number;
   max_booking_duration_hours: number;
+  entrance_pass_price_per_guest: number;
 };
 
 // Defaults mirrored from the DB column defaults so a fresh install (or a
@@ -30,6 +31,7 @@ const DEFAULTS: FacilitySettings = {
   contact_phone: null,
   pending_expiry_hours: 24,
   max_booking_duration_hours: 5,
+  entrance_pass_price_per_guest: 100,
 };
 
 // Read the settings row through a bare anon client. The server client isn't
@@ -45,7 +47,7 @@ async function fetchFacilitySettings(): Promise<FacilitySettings> {
   const { data, error } = await supabase
     .from("facility_settings")
     .select(
-      "facility_name, operating_hours_start, operating_hours_end, contact_email, contact_phone, pending_expiry_hours, max_booking_duration_hours",
+      "facility_name, operating_hours_start, operating_hours_end, contact_email, contact_phone, pending_expiry_hours, max_booking_duration_hours, entrance_pass_price_per_guest",
     )
     .eq("id", 1)
     .maybeSingle();
@@ -63,6 +65,10 @@ async function fetchFacilitySettings(): Promise<FacilitySettings> {
       data.pending_expiry_hours ?? DEFAULTS.pending_expiry_hours,
     max_booking_duration_hours:
       data.max_booking_duration_hours ?? DEFAULTS.max_booking_duration_hours,
+    entrance_pass_price_per_guest:
+      data.entrance_pass_price_per_guest != null
+        ? Number(data.entrance_pass_price_per_guest)
+        : DEFAULTS.entrance_pass_price_per_guest,
   };
 }
 
