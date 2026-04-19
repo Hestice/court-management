@@ -42,41 +42,13 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import {
+  formatFacilityDate as formatDate,
+  formatHour,
+  formatHourRange as formatRange,
+  todayInFacility,
+} from "@/lib/timezone";
 import { cn } from "@/lib/utils";
-
-function formatHour(hour: number): string {
-  const normalized = ((hour % 24) + 24) % 24;
-  const suffix = normalized < 12 ? "am" : "pm";
-  const display = normalized % 12 === 0 ? 12 : normalized % 12;
-  return `${display}${suffix}`;
-}
-
-function formatRange(start: number, end: number): string {
-  return `${formatHour(start)}–${formatHour(end)}`;
-}
-
-function formatDate(iso: string): string {
-  const [y, m, d] = iso.split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    timeZone: "UTC",
-  });
-}
-
-function todayInManila(): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Manila",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  return `${parts.find((p) => p.type === "year")!.value}-${
-    parts.find((p) => p.type === "month")!.value
-  }-${parts.find((p) => p.type === "day")!.value}`;
-}
 
 type Filter = "upcoming" | "past";
 
@@ -101,7 +73,7 @@ export function BlockedSlotsView({
   const [bulkPending, startBulkTransition] = useTransition();
   const router = useRouter();
 
-  const today = todayInManila();
+  const today = todayInFacility();
 
   const { upcoming, past } = useMemo(() => {
     const up: BlockedSlotRow[] = [];

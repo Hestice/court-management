@@ -3,21 +3,14 @@
 import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
+import {
+  formatHour,
+  formatHourRange as formatRange,
+  todayInFacility,
+} from "@/lib/timezone";
 import { createBlockSchema, type CreateBlockValues } from "./schema";
 
 export type ActionResult = { success: boolean; error?: string };
-
-// e.g. 14 → "2pm", 0 → "12am", 12 → "12pm", 24 → "12am"
-function formatHour(hour: number): string {
-  const normalized = ((hour % 24) + 24) % 24;
-  const suffix = normalized < 12 ? "am" : "pm";
-  const display = normalized % 12 === 0 ? 12 : normalized % 12;
-  return `${display}${suffix}`;
-}
-
-function formatRange(start: number, end: number): string {
-  return `${formatHour(start)}–${formatHour(end)}`;
-}
 
 export async function createBlockedSlot(
   values: CreateBlockValues,
@@ -51,16 +44,7 @@ export async function createBlockedSlot(
   }
 
   // Validate date is today or future (facility local date).
-  const todayParts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Manila",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const today = `${todayParts.find((p) => p.type === "year")!.value}-${
-    todayParts.find((p) => p.type === "month")!.value
-  }-${todayParts.find((p) => p.type === "day")!.value}`;
-  if (slot_date < today) {
+  if (slot_date < todayInFacility()) {
     return { success: false, error: "Date must be today or later." };
   }
 
