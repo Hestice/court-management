@@ -85,7 +85,6 @@ const STATUS_CLASSES: Record<BookingStatus, string> = {
   completed: "",
 };
 
-const NOTES_AUTOSAVE_DEBOUNCE_MS = 1000;
 const NOTES_MAX = 2000;
 
 function formatPHP(amount: number): string {
@@ -813,47 +812,59 @@ function AdminNotes({
   initial: string;
 }) {
   const [value, setValue] = useState(initial);
+  const [baseline, setBaseline] = useState(initial);
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">(
     "idle",
   );
-  const baselineRef = useRef(initial);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inFlightRef = useRef(false);
 
-  useEffect(() => {
-    // Server-driven updates (e.g. action revalidatePath) override local text
-    // only when the local text hasn't diverged from the last-seen baseline —
-    // otherwise we'd clobber the admin's unsaved keystrokes.
-    if (value === baselineRef.current) {
-      baselineRef.current = initial;
-      setValue(initial);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initial]);
+  // Adjust state from props during render (React 19 pattern): when the
+  // server-side initial changes and the user hasn't locally diverged, adopt
+  // the new text. If local has diverged (they're in the middle of typing),
+  // leave it alone.
+  if (initial !== baseline && value === baseline) {
+    setBaseline(initial);
+    setValue(initial);
+  }
 
-  useEffect(
-    () => () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    },
-    [],
-  );
+  const dirty = value !== baseline;
 
-  function scheduleSave(next: string) {
-    if (timerRef.current) clearTimeout(timerRef.current);
-    if (next === baselineRef.current) {
-      setStatus("idle");
-      return;
-    }
+  async function save() {
+    // Guard against double-submits from simultaneous blur + click-save.
+    if (!dirty || inFlightRef.current) return;
+    const snapshot = value;
+    inFlightRef.current = true;
     setStatus("saving");
-    timerRef.current = setTimeout(async () => {
-      const res = await saveBookingNotes(bookingId, { notes: next });
+    try {
+      const res = await saveBookingNotes(bookingId, { notes: snapshot });
       if (res.success) {
-        baselineRef.current = next;
+        setBaseline(snapshot);
         setStatus("saved");
       } else {
         setStatus("error");
         toast.error(res.error);
       }
-    }, NOTES_AUTOSAVE_DEBOUNCE_MS);
+    } finally {
+      inFlightRef.current = false;
+    }
+  }
+
+  // Label + colour for the right-hand indicator. Priority is saving > dirty
+  // > saved/error/idle so an in-flight request never looks like "unsaved".
+  let indicatorText = "";
+  let indicatorClass = "";
+  if (status === "saving") {
+    indicatorText = "Saving…";
+    indicatorClass = "text-muted-foreground";
+  } else if (dirty) {
+    indicatorText = "Unsaved changes";
+    indicatorClass = "text-amber-600";
+  } else if (status === "saved") {
+    indicatorText = "Saved";
+    indicatorClass = "text-emerald-600";
+  } else if (status === "error") {
+    indicatorText = "Save failed";
+    indicatorClass = "text-destructive";
   }
 
   return (
@@ -864,25 +875,12 @@ function AdminNotes({
             Admin notes
           </h2>
           <p className="text-xs text-muted-foreground">
-            Internal — never shown to the customer. Autosaves as you type.
+            Internal — never shown to the customer. Saves when you click away
+            or press Save.
           </p>
         </div>
-        <span
-          className={cn(
-            "text-xs",
-            status === "saving" && "text-muted-foreground",
-            status === "saved" && "text-emerald-600",
-            status === "error" && "text-destructive",
-          )}
-          aria-live="polite"
-        >
-          {status === "saving"
-            ? "Saving…"
-            : status === "saved"
-              ? "Saved"
-              : status === "error"
-                ? "Save failed"
-                : ""}
+        <span className={cn("text-xs", indicatorClass)} aria-live="polite">
+          {indicatorText}
         </span>
       </div>
       <Textarea
@@ -891,13 +889,27 @@ function AdminNotes({
         value={value}
         onChange={(e) => {
           setValue(e.target.value);
-          scheduleSave(e.target.value);
+          // Clear the "Saved"/"Save failed" badge once they start editing
+          // again so the indicator isn't misleading.
+          if (status === "saved" || status === "error") setStatus("idle");
         }}
+        onBlur={save}
         placeholder="Reminders for the team, context from the customer, payment verification notes…"
       />
-      <p className="text-xs text-muted-foreground">
-        {value.length}/{NOTES_MAX}
-      </p>
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs text-muted-foreground">
+          {value.length}/{NOTES_MAX}
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={save}
+          disabled={!dirty || status === "saving"}
+        >
+          {status === "saving" ? "Saving…" : "Save"}
+        </Button>
+      </div>
     </section>
   );
 }

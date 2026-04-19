@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronLeft, Trash2 } from "lucide-react";
@@ -46,7 +46,6 @@ export type EntryDetailRow = {
   linked_booking: LinkedBooking | null;
 };
 
-const NOTES_AUTOSAVE_DEBOUNCE_MS = 1000;
 const NOTES_MAX = 2000;
 
 function formatPHP(amount: number): string {
@@ -192,44 +191,54 @@ function EntryNotes({
   initial: string;
 }) {
   const [value, setValue] = useState(initial);
+  const [baseline, setBaseline] = useState(initial);
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">(
     "idle",
   );
-  const baselineRef = useRef(initial);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inFlightRef = useRef(false);
 
-  useEffect(() => {
-    if (value === baselineRef.current) {
-      baselineRef.current = initial;
-      setValue(initial);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initial]);
+  // Adjust state from props during render (React 19 pattern): adopt the new
+  // server-side initial unless the user has locally diverged.
+  if (initial !== baseline && value === baseline) {
+    setBaseline(initial);
+    setValue(initial);
+  }
 
-  useEffect(
-    () => () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    },
-    [],
-  );
+  const dirty = value !== baseline;
 
-  function scheduleSave(next: string) {
-    if (timerRef.current) clearTimeout(timerRef.current);
-    if (next === baselineRef.current) {
-      setStatus("idle");
-      return;
-    }
+  async function save() {
+    if (!dirty || inFlightRef.current) return;
+    const snapshot = value;
+    inFlightRef.current = true;
     setStatus("saving");
-    timerRef.current = setTimeout(async () => {
-      const res = await saveWalkInEntryNotes(entryId, { notes: next });
+    try {
+      const res = await saveWalkInEntryNotes(entryId, { notes: snapshot });
       if (res.success) {
-        baselineRef.current = next;
+        setBaseline(snapshot);
         setStatus("saved");
       } else {
         setStatus("error");
         toast.error(res.error);
       }
-    }, NOTES_AUTOSAVE_DEBOUNCE_MS);
+    } finally {
+      inFlightRef.current = false;
+    }
+  }
+
+  let indicatorText = "";
+  let indicatorClass = "";
+  if (status === "saving") {
+    indicatorText = "Saving…";
+    indicatorClass = "text-muted-foreground";
+  } else if (dirty) {
+    indicatorText = "Unsaved changes";
+    indicatorClass = "text-amber-600";
+  } else if (status === "saved") {
+    indicatorText = "Saved";
+    indicatorClass = "text-emerald-600";
+  } else if (status === "error") {
+    indicatorText = "Save failed";
+    indicatorClass = "text-destructive";
   }
 
   return (
@@ -238,25 +247,11 @@ function EntryNotes({
         <div>
           <h2 className="text-sm font-medium text-muted-foreground">Notes</h2>
           <p className="text-xs text-muted-foreground">
-            Autosaves as you type.
+            Saves when you click away or press Save.
           </p>
         </div>
-        <span
-          className={cn(
-            "text-xs",
-            status === "saving" && "text-muted-foreground",
-            status === "saved" && "text-emerald-600",
-            status === "error" && "text-destructive",
-          )}
-          aria-live="polite"
-        >
-          {status === "saving"
-            ? "Saving…"
-            : status === "saved"
-              ? "Saved"
-              : status === "error"
-                ? "Save failed"
-                : ""}
+        <span className={cn("text-xs", indicatorClass)} aria-live="polite">
+          {indicatorText}
         </span>
       </div>
       <Textarea
@@ -265,13 +260,25 @@ function EntryNotes({
         value={value}
         onChange={(e) => {
           setValue(e.target.value);
-          scheduleSave(e.target.value);
+          if (status === "saved" || status === "error") setStatus("idle");
         }}
+        onBlur={save}
         placeholder="Additional context for this entry…"
       />
-      <p className="text-xs text-muted-foreground">
-        {value.length}/{NOTES_MAX}
-      </p>
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs text-muted-foreground">
+          {value.length}/{NOTES_MAX}
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={save}
+          disabled={!dirty || status === "saving"}
+        >
+          {status === "saving" ? "Saving…" : "Save"}
+        </Button>
+      </div>
     </section>
   );
 }
