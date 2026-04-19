@@ -11,6 +11,8 @@ import {
   AlertTriangle,
   CameraOff,
   CheckCircle2,
+  Maximize2,
+  Minimize2,
   ScanLine,
   Search,
   X,
@@ -94,7 +96,43 @@ export function ScannerView({
   const [mode, setMode] = useState<Mode>("camera");
   const [outcome, setOutcome] = useState<RedemptionResult | null>(null);
   const [pending, startTransition] = useTransition();
+  const [kiosk, setKiosk] = useState(false);
   const lastCodeRef = useRef<{ code: string; at: number } | null>(null);
+
+  // Kiosk mode: fixed-overlay view for unattended laptops at the gate. An
+  // opaque black panel covers the admin sidebar + page chrome so customers
+  // glancing at the screen see only the scanner. Also attempts to go browser
+  // fullscreen (belt-and-suspenders — the overlay alone is enough to hide
+  // admin UI, fullscreen just hides URL bar/tabs).
+  const enterKiosk = useCallback(() => {
+    setMode("camera");
+    setKiosk(true);
+    const root = document.documentElement;
+    if (root.requestFullscreen && !document.fullscreenElement) {
+      root.requestFullscreen().catch(() => {
+        /* fullscreen blocked (iframe, permissions) — overlay still applies */
+      });
+    }
+  }, []);
+
+  const exitKiosk = useCallback(() => {
+    setKiosk(false);
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    }
+  }, []);
+
+  // Sync kiosk state with the native fullscreen state. If the user presses
+  // Esc (which exits fullscreen) we also drop out of kiosk so they aren't
+  // stuck with the opaque overlay but no URL bar.
+  useEffect(() => {
+    if (!kiosk) return;
+    function onFsChange() {
+      if (!document.fullscreenElement) setKiosk(false);
+    }
+    document.addEventListener("fullscreenchange", onFsChange);
+    return () => document.removeEventListener("fullscreenchange", onFsChange);
+  }, [kiosk]);
 
   // Auto-dismiss success after SUCCESS_DISMISS_MS. Other outcomes stay until
   // the admin acts on them.
@@ -173,27 +211,67 @@ export function ScannerView({
   // can read it without the feed re-triggering on the same code.
   const scannerPaused = !!outcome || pending;
 
+  // In kiosk mode we force camera-only; manual search has no UI in that
+  // mode because the chrome around it is hidden.
+  const showManual = !kiosk && mode === "manual";
+
   return (
-    <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 px-4 py-6 sm:px-6 sm:py-8">
-      <header className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-          QR Scanner
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          {formatFacilityDate(today)} · {bookings.length}{" "}
-          {bookings.length === 1 ? "booking" : "bookings"} today
-        </p>
-      </header>
+    <main
+      className={cn(
+        kiosk
+          ? "fixed inset-0 z-50 flex flex-col gap-3 bg-black p-3 sm:p-4"
+          : "mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 px-4 py-6 sm:px-6 sm:py-8",
+      )}
+    >
+      {!kiosk ? (
+        <>
+          <header className="flex flex-wrap items-start justify-between gap-2">
+            <div className="flex flex-col gap-1">
+              <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+                QR Scanner
+              </h1>
+              <p className="text-sm text-muted-foreground">
+                {formatFacilityDate(today)} · {bookings.length}{" "}
+                {bookings.length === 1 ? "booking" : "bookings"} today
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={enterKiosk}
+              className="gap-1.5"
+            >
+              <Maximize2 className="h-4 w-4" aria-hidden />
+              Kiosk mode
+            </Button>
+          </header>
 
-      <ModeTabs mode={mode} onChange={setMode} />
-
-      {mode === "camera" ? (
-        <CameraPanel paused={scannerPaused} onDecode={submitQr} />
+          <ModeTabs mode={mode} onChange={setMode} />
+        </>
       ) : (
+        <button
+          type="button"
+          onClick={exitKiosk}
+          aria-label="Exit kiosk mode"
+          className="absolute right-3 top-3 z-10 inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-white/80 backdrop-blur hover:bg-white/20 hover:text-white sm:right-4 sm:top-4"
+        >
+          <Minimize2 className="h-3.5 w-3.5" aria-hidden />
+          Exit kiosk
+        </button>
+      )}
+
+      {showManual ? (
         <ManualPanel
           bookings={bookings}
           pending={pending}
           onRedeem={(guestId) => submitGuestId(guestId)}
+        />
+      ) : (
+        <CameraPanel
+          paused={scannerPaused}
+          onDecode={submitQr}
+          fill={kiosk}
         />
       )}
 
@@ -201,6 +279,7 @@ export function ScannerView({
         <ResultCard
           outcome={outcome}
           pending={pending}
+          kiosk={kiosk}
           onDismiss={clearOutcome}
           onConfirmOverride={confirmOverride}
         />
@@ -262,9 +341,11 @@ function ModeTabs({
 function CameraPanel({
   paused,
   onDecode,
+  fill = false,
 }: {
   paused: boolean;
   onDecode: (qr: string) => void;
+  fill?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const scannerRef = useRef<QrScanner | null>(null);
@@ -363,9 +444,22 @@ function CameraPanel({
     );
   }
 
+  // In fill mode (kiosk) the video expands to fill all available parent
+  // height; otherwise it uses the normal portrait-on-mobile / video ratio.
   return (
-    <div className="space-y-2">
-      <div className="relative aspect-[3/4] w-full overflow-hidden rounded-xl bg-black sm:aspect-video">
+    <div
+      className={cn(
+        fill ? "flex min-h-0 flex-1 flex-col" : "space-y-2",
+      )}
+    >
+      <div
+        className={cn(
+          "relative w-full overflow-hidden bg-black",
+          fill
+            ? "flex-1 rounded-lg"
+            : "aspect-[3/4] rounded-xl sm:aspect-video",
+        )}
+      >
         <video
           ref={videoRef}
           className="h-full w-full object-cover"
@@ -378,10 +472,12 @@ function CameraPanel({
           </div>
         ) : null}
       </div>
-      <p className="text-xs text-muted-foreground">
-        Point the camera at the guest&apos;s QR code. Results appear
-        automatically.
-      </p>
+      {!fill ? (
+        <p className="text-xs text-muted-foreground">
+          Point the camera at the guest&apos;s QR code. Results appear
+          automatically.
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -524,11 +620,13 @@ function ManualBookingRow({
 function ResultCard({
   outcome,
   pending,
+  kiosk = false,
   onDismiss,
   onConfirmOverride,
 }: {
   outcome: RedemptionResult;
   pending: boolean;
+  kiosk?: boolean;
   onDismiss: () => void;
   onConfirmOverride: () => void;
 }) {
@@ -543,6 +641,7 @@ function ResultCard({
         "border-2 shadow-lg",
         palette.border,
         palette.bg,
+        kiosk && "shrink-0",
       )}
     >
       <CardHeader>
