@@ -1,12 +1,14 @@
 import * as z from "zod";
 
+import { EMAIL_MAX, NAME_MAX, PHONE_MAX, safeText } from "@/lib/zod-helpers";
+
 export const facilitySettingsSchema = z
   .object({
-    facility_name: z
-      .string()
-      .trim()
-      .min(1, { message: "Facility name is required." })
-      .max(120),
+    facility_name: safeText({
+      min: 1,
+      max: NAME_MAX,
+      label: "Facility name",
+    }),
     operating_hours_start: z
       .number({ message: "Operating hours start must be a number." })
       .int({ message: "Operating hours start must be a whole number." })
@@ -20,14 +22,21 @@ export const facilitySettingsSchema = z
     contact_email: z
       .string()
       .trim()
+      .max(EMAIL_MAX)
       .email({ message: "Enter a valid email." })
       .or(z.literal(""))
       .optional(),
-    contact_phone: z.string().trim().max(40).optional().or(z.literal("")),
+    contact_phone: z
+      .string()
+      .trim()
+      .max(PHONE_MAX)
+      .optional()
+      .or(z.literal("")),
     pending_expiry_hours: z
       .number({ message: "Pending expiry must be a number." })
       .int({ message: "Pending expiry must be a whole number." })
-      .min(1, { message: "Pending expiry must be at least 1 hour." }),
+      .min(1, { message: "Pending expiry must be at least 1 hour." })
+      .max(168, { message: "Pending expiry must be 168 hours (1 week) or less." }),
     max_booking_duration_hours: z
       .number({ message: "Maximum booking duration must be a number." })
       .int({ message: "Maximum booking duration must be a whole number." })

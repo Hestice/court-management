@@ -1,5 +1,7 @@
 import * as z from "zod";
 
+import { REASON_MAX, safeText } from "@/lib/zod-helpers";
+
 export const createBlockSchema = z
   .object({
     court_id: z.string().uuid({ message: "Select a court." }),
@@ -16,11 +18,7 @@ export const createBlockSchema = z
       .int({ message: "End hour must be a whole number." })
       .min(1, { message: "End hour must be 1 or greater." })
       .max(24, { message: "End hour must be 24 or less." }),
-    reason: z
-      .string()
-      .trim()
-      .max(500, { message: "Reason must be 500 characters or less." })
-      .optional(),
+    reason: safeText({ max: REASON_MAX, label: "Reason" }).optional(),
   })
   .refine((v) => v.end_hour > v.start_hour, {
     message: "End must be after start.",

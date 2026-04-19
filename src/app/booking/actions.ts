@@ -8,6 +8,7 @@ import {
 } from "@/lib/rate-limit";
 import { createClient } from "@/lib/supabase/server";
 import { formatHour, todayInFacility } from "@/lib/timezone";
+import { addDaysIso, BOOKING_DATE_MAX_DAYS } from "@/lib/zod-helpers";
 import { createBookingSchema, type CreateBookingValues } from "./schema";
 
 export type CreateBookingResult =
@@ -46,8 +47,15 @@ export async function createBooking(
     };
   }
 
-  if (booking_date < todayInFacility()) {
+  const today = todayInFacility();
+  if (booking_date < today) {
     return { success: false, error: "Date must be today or later." };
+  }
+  if (booking_date > addDaysIso(today, BOOKING_DATE_MAX_DAYS)) {
+    return {
+      success: false,
+      error: `Bookings can't be more than ${BOOKING_DATE_MAX_DAYS} days out.`,
+    };
   }
 
   // Parallel fetch: court + settings. Validation is server-authoritative;

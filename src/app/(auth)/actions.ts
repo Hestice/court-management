@@ -58,6 +58,21 @@ export async function register(_prev: AuthResult, formData: FormData): Promise<A
   if (name.length < 2) {
     return { error: "Name must be at least 2 characters." };
   }
+  if (name.length > 100) {
+    return { error: "Name must be 100 characters or less." };
+  }
+  if (/<[a-zA-Z!/]|&#[0-9a-zA-Z]/.test(name)) {
+    return { error: "Name must not contain HTML." };
+  }
+  if (email.length > 254) {
+    return { error: "Email is too long." };
+  }
+  if (password.length < 8) {
+    return { error: "Password must be at least 8 characters." };
+  }
+  if (password.length > 128) {
+    return { error: "Password must be 128 characters or less." };
+  }
 
   const ip = await getRequestIp();
   const rate = await checkPreset("register", ip);

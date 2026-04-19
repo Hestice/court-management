@@ -8,6 +8,7 @@ import {
   formatHourRange as formatRange,
   todayInFacility,
 } from "@/lib/timezone";
+import { addDaysIso, BLOCK_DATE_MAX_DAYS } from "@/lib/zod-helpers";
 import { createBlockSchema, type CreateBlockValues } from "./schema";
 
 export type ActionResult = { success: boolean; error?: string };
@@ -43,9 +44,17 @@ export async function createBlockedSlot(
     return { success: false, error: "Court is not active." };
   }
 
-  // Validate date is today or future (facility local date).
-  if (slot_date < todayInFacility()) {
+  // Validate date is today or future (facility local date) and within the
+  // allowed future window. 365 days is well beyond any legitimate block.
+  const today = todayInFacility();
+  if (slot_date < today) {
     return { success: false, error: "Date must be today or later." };
+  }
+  if (slot_date > addDaysIso(today, BLOCK_DATE_MAX_DAYS)) {
+    return {
+      success: false,
+      error: `Date must be within ${BLOCK_DATE_MAX_DAYS} days.`,
+    };
   }
 
   // Validate hours fall inside operating hours.
