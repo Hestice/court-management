@@ -1,0 +1,13 @@
+User-agent: *
+Allow: /$
+Allow: /events
+Allow: /contact
+Disallow: /admin
+Disallow: /booking
+Disallow: /my-bookings
+Disallow: /my-passes
+Disallow: /account
+Disallow: /login
+Disallow: /register
+Disallow: /payment
+Disallow: /auth

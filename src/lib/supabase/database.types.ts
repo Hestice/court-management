@@ -14,6 +14,41 @@ export type Database = {
   }
   public: {
     Tables: {
+      audit_logs: {
+        Row: {
+          action: string
+          actor_user_id: string | null
+          created_at: string
+          id: string
+          ip_address: string | null
+          metadata: Json | null
+        }
+        Insert: {
+          action: string
+          actor_user_id?: string | null
+          created_at?: string
+          id?: string
+          ip_address?: string | null
+          metadata?: Json | null
+        }
+        Update: {
+          action?: string
+          actor_user_id?: string | null
+          created_at?: string
+          id?: string
+          ip_address?: string | null
+          metadata?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_logs_actor_user_id_fkey"
+            columns: ["actor_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       blocked_slots: {
         Row: {
           court_id: string
@@ -69,13 +104,16 @@ export type Database = {
           court_id: string
           created_at: string
           end_hour: number
+          expires_at: string | null
           id: string
           payment_receipt_url: string | null
           start_hour: number
           status: string
           total_amount: number
           updated_at: string
-          user_id: string
+          user_id: string | null
+          walk_in_name: string | null
+          walk_in_phone: string | null
         }
         Insert: {
           admin_notes?: string | null
@@ -83,13 +121,16 @@ export type Database = {
           court_id: string
           created_at?: string
           end_hour: number
+          expires_at?: string | null
           id?: string
           payment_receipt_url?: string | null
           start_hour: number
           status?: string
           total_amount: number
           updated_at?: string
-          user_id: string
+          user_id?: string | null
+          walk_in_name?: string | null
+          walk_in_phone?: string | null
         }
         Update: {
           admin_notes?: string | null
@@ -97,13 +138,16 @@ export type Database = {
           court_id?: string
           created_at?: string
           end_hour?: number
+          expires_at?: string | null
           id?: string
           payment_receipt_url?: string | null
           start_hour?: number
           status?: string
           total_amount?: number
           updated_at?: string
-          user_id?: string
+          user_id?: string | null
+          walk_in_name?: string | null
+          walk_in_phone?: string | null
         }
         Relationships: [
           {
@@ -232,8 +276,10 @@ export type Database = {
           contact_phone: string | null
           facility_name: string
           id: number
+          max_booking_duration_hours: number
           operating_hours_end: number
           operating_hours_start: number
+          pending_expiry_hours: number
           updated_at: string
         }
         Insert: {
@@ -241,8 +287,10 @@ export type Database = {
           contact_phone?: string | null
           facility_name?: string
           id?: number
+          max_booking_duration_hours?: number
           operating_hours_end?: number
           operating_hours_start?: number
+          pending_expiry_hours?: number
           updated_at?: string
         }
         Update: {
@@ -250,8 +298,10 @@ export type Database = {
           contact_phone?: string | null
           facility_name?: string
           id?: number
+          max_booking_duration_hours?: number
           operating_hours_end?: number
           operating_hours_start?: number
+          pending_expiry_hours?: number
           updated_at?: string
         }
         Relationships: []
@@ -325,6 +375,24 @@ export type Database = {
         }
         Relationships: []
       }
+      rate_limits: {
+        Row: {
+          count: number
+          key: string
+          window_start: string
+        }
+        Insert: {
+          count?: number
+          key: string
+          window_start?: string
+        }
+        Update: {
+          count?: number
+          key?: string
+          window_start?: string
+        }
+        Relationships: []
+      }
       users: {
         Row: {
           created_at: string
@@ -354,7 +422,24 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      check_rate_limit: {
+        Args: { p_key: string; p_limit: number; p_window_seconds: number }
+        Returns: Json
+      }
       is_admin: { Args: never; Returns: boolean }
+      log_audit_event: {
+        Args: {
+          p_action: string
+          p_actor_user_id?: string
+          p_ip_address?: string
+          p_metadata?: Json
+        }
+        Returns: undefined
+      }
+      sweep_rate_limits: {
+        Args: { older_than_seconds: number }
+        Returns: undefined
+      }
     }
     Enums: {
       [_ in never]: never
