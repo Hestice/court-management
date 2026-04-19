@@ -1,7 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 
+import { createReceiptSignedUrl } from "@/lib/receipt";
 import { createClient } from "@/lib/supabase/server";
-import { createServiceClient } from "@/lib/supabase/service";
 
 import { PaymentView, type PaymentMethodForCustomer } from "./payment-view";
 
@@ -84,17 +84,13 @@ export default async function PaymentPage({
 
   // Sign the current receipt (if any) so the view can render a preview right
   // away. Signed URLs expire — the client re-signs via a server action if the
-  // user uploads a new file. Service client so admins can also view their
-  // customers' receipts on this page.
+  // user uploads a new file. The helper uses the service client so admins can
+  // view their customers' receipts on this page too.
   let initialReceipt: { path: string; signedUrl: string | null } | null = null;
   if (booking.payment_receipt_url) {
-    const service = createServiceClient();
-    const { data: signed } = await service.storage
-      .from("payment-receipts")
-      .createSignedUrl(booking.payment_receipt_url, 60 * 60);
     initialReceipt = {
       path: booking.payment_receipt_url,
-      signedUrl: signed?.signedUrl ?? null,
+      signedUrl: await createReceiptSignedUrl(booking.payment_receipt_url),
     };
   }
 

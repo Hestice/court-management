@@ -2,13 +2,25 @@ import { createClient } from "@/lib/supabase/server";
 import { logError } from "@/lib/logger";
 
 // Narrow, fixed list. Keep additions deliberate — audit noise is the
-// fastest way to make the table useless.
+// fastest way to make the table useless. Booking events land here because
+// they're the source of truth for the per-booking activity log on the admin
+// detail page; without them the "who changed this and when" question has no
+// answer once the row has been overwritten.
 export type AuditAction =
   | "auth.login.success"
   | "auth.login.failure"
   | "auth.register"
   | "role.change"
-  | "rate_limit.hit";
+  | "rate_limit.hit"
+  | "booking.created"
+  | "booking.walkin_created"
+  | "booking.receipt_uploaded"
+  | "booking.approved"
+  | "booking.rejected"
+  | "booking.rescheduled"
+  | "booking.cancelled"
+  | "booking.completed"
+  | "booking.note_updated";
 
 export type AuditMetadata = Record<string, unknown>;
 
