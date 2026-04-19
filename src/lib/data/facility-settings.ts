@@ -1,9 +1,8 @@
 import "server-only";
 
+import { createClient as createAnonClient } from "@supabase/supabase-js";
 import { unstable_cache } from "next/cache";
 import { cache } from "react";
-
-import { createClient } from "@/lib/supabase/server";
 
 import { throwDataError } from "./_shared";
 
@@ -33,11 +32,16 @@ const DEFAULTS: FacilitySettings = {
   max_booking_duration_hours: 5,
 };
 
-// Read the settings row through the request-scoped client. The row has a
-// public RLS policy (same answer for every caller) so it's safe to pull the
-// result through unstable_cache below and share across users.
+// Read the settings row through a bare anon client. The server client isn't
+// usable here because unstable_cache disallows cookies() inside its callback;
+// the settings row has a public RLS policy so a cookie-less anon read returns
+// the same data to every caller, which is exactly what we want to cache.
 async function fetchFacilitySettings(): Promise<FacilitySettings> {
-  const supabase = await createClient();
+  const supabase = createAnonClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { auth: { persistSession: false, autoRefreshToken: false } },
+  );
   const { data, error } = await supabase
     .from("facility_settings")
     .select(
