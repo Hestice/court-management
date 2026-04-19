@@ -24,6 +24,10 @@ export type CourtAvailability = {
 export async function getAvailability(params: {
   date: string;
   courtId?: string;
+  // When rescheduling, the booking being moved should not block itself from
+  // appearing available in its *current* slot. Pass its id here and that row
+  // is ignored when building per-hour status.
+  excludeBookingId?: string;
 }): Promise<CourtAvailability[]> {
   const supabase = await createClient();
 
@@ -49,6 +53,7 @@ export async function getAvailability(params: {
           .eq("booking_date", params.date)
           .in("status", ["pending", "confirmed"]);
         if (params.courtId) q = q.eq("court_id", params.courtId);
+        if (params.excludeBookingId) q = q.neq("id", params.excludeBookingId);
         return q;
       })(),
       (() => {

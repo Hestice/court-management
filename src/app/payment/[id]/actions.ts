@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
+import { logAuditEvent } from "@/lib/audit";
 import {
   convertToWebp,
   RECEIPT_CONVERT_DEFAULTS,
@@ -13,6 +14,7 @@ import {
 } from "@/lib/upload-validation";
 import { logError } from "@/lib/logger";
 import { checkPreset, formatRetryAfter } from "@/lib/rate-limit";
+import { createReceiptSignedUrl, RECEIPT_BUCKET } from "@/lib/receipt";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 
@@ -20,32 +22,12 @@ export type UploadReceiptResult =
   | { success: true; path: string; signedUrl: string | null }
   | { success: false; error: string };
 
-const RECEIPT_BUCKET = "payment-receipts";
 const RECEIPT_FILENAME = "receipt.webp";
-const RECEIPT_SIGNED_URL_TTL = 60 * 60;
-
-// Sign a receipt for private display. The bucket is private, so the UI never
-// holds a permanent URL — signed URLs are requested on demand and expire.
-// Uses the service client so signing works regardless of the caller's role
-// (admins viewing customer receipts rely on this too).
-async function signReceiptUrl(path: string): Promise<string | null> {
-  const service = createServiceClient();
-  const { data, error } = await service.storage
-    .from(RECEIPT_BUCKET)
-    .createSignedUrl(path, RECEIPT_SIGNED_URL_TTL);
-  if (error || !data) {
-    logError("payment.sign_receipt_failed", error ?? new Error("empty"), {
-      path,
-    });
-    return null;
-  }
-  return data.signedUrl;
-}
 
 export async function getReceiptSignedUrl(
   path: string,
 ): Promise<string | null> {
-  return signReceiptUrl(path);
+  return createReceiptSignedUrl(path);
 }
 
 export async function uploadReceipt(
@@ -177,9 +159,16 @@ export async function uploadReceipt(
     return { success: false, error: "Couldn't save receipt reference." };
   }
 
-  const signedUrl = await signReceiptUrl(path);
+  await logAuditEvent("booking.receipt_uploaded", {
+    actorUserId: user.id,
+    metadata: { booking_id: bookingId },
+  });
+
+  const signedUrl = await createReceiptSignedUrl(path);
 
   revalidatePath(`/payment/${bookingId}`);
   revalidatePath("/my-bookings");
+  revalidatePath(`/admin/bookings/${bookingId}`);
+  revalidatePath("/admin/bookings");
   return { success: true, path, signedUrl };
 }
