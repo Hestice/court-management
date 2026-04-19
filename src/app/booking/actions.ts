@@ -31,7 +31,8 @@ export async function createBooking(
     return { success: false, error: parsed.error.issues[0].message };
   }
 
-  const { court_id, booking_date, start_hour, duration_hours } = parsed.data;
+  const { court_id, booking_date, start_hour, duration_hours, guest_count } =
+    parsed.data;
   const end_hour = start_hour + duration_hours;
 
   const auth = await requireUser();
@@ -93,7 +94,10 @@ export async function createBooking(
     };
   }
 
-  const total_amount = Number(court.hourly_rate) * duration_hours;
+  const courtRental = Number(court.hourly_rate) * duration_hours;
+  const entrance =
+    Number(settings.entrance_pass_price_per_guest) * guest_count;
+  const total_amount = courtRental + entrance;
   const expires_at = new Date(
     Date.now() + settings.pending_expiry_hours * 60 * 60 * 1000,
   ).toISOString();
@@ -108,6 +112,7 @@ export async function createBooking(
       end_hour,
       status: "pending",
       total_amount,
+      guest_count,
       expires_at,
     })
     .select("id")
@@ -134,6 +139,7 @@ export async function createBooking(
       booking_date,
       start_hour,
       end_hour,
+      guest_count,
     },
   });
 
