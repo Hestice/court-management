@@ -14,6 +14,7 @@ type BookingWithCourt = {
   total_amount: number;
   expires_at: string | null;
   created_at: string;
+  payment_receipt_url: string | null;
   court: { name: string } | null;
 };
 
@@ -29,7 +30,7 @@ export default async function MyBookingsPage() {
   const { data, error } = await supabase
     .from("bookings")
     .select(
-      "id, booking_date, start_hour, end_hour, status, total_amount, expires_at, created_at, court:courts!bookings_court_id_fkey(name)",
+      "id, booking_date, start_hour, end_hour, status, total_amount, expires_at, created_at, payment_receipt_url, court:courts!bookings_court_id_fkey(name)",
     )
     .eq("user_id", user.id)
     .order("booking_date", { ascending: false })
@@ -50,6 +51,7 @@ export default async function MyBookingsPage() {
     status: b.status,
     total_amount: Number(b.total_amount),
     expires_at: b.expires_at,
+    has_receipt: !!b.payment_receipt_url,
   }));
 
   return (

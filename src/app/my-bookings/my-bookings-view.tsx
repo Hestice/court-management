@@ -24,6 +24,7 @@ export type MyBookingRow = {
   status: string;
   total_amount: number;
   expires_at: string | null;
+  has_receipt: boolean;
 };
 
 type Filter = "upcoming" | "past";
@@ -140,6 +141,11 @@ export function MyBookingsView({
           {r.status === "pending" && r.expires_at ? (
             <ExpiryCountdown expiresAt={r.expires_at} />
           ) : null}
+          {r.status === "pending" && r.has_receipt ? (
+            <span className="text-xs text-muted-foreground">
+              Receipt uploaded — awaiting admin review
+            </span>
+          ) : null}
         </div>
       ),
     },
@@ -147,6 +153,10 @@ export function MyBookingsView({
       header: "Total",
       cell: (r) => formatPHP(r.total_amount),
       className: "tabular-nums",
+    },
+    {
+      header: "Payment",
+      cell: (r) => <PaymentCell row={r} />,
     },
   ];
 
@@ -201,6 +211,22 @@ export function MyBookingsView({
         empty={filter === "upcoming" ? emptyUpcoming : emptyPast}
       />
     </>
+  );
+}
+
+function PaymentCell({ row }: { row: MyBookingRow }) {
+  if (row.status !== "pending") return <span>—</span>;
+  if (!row.has_receipt) {
+    return (
+      <Button asChild size="sm">
+        <Link href={`/payment/${row.id}`}>Upload Payment</Link>
+      </Button>
+    );
+  }
+  return (
+    <Button asChild size="sm" variant="ghost">
+      <Link href={`/payment/${row.id}`}>View Payment</Link>
+    </Button>
   );
 }
 

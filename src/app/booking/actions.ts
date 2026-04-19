@@ -142,7 +142,19 @@ export async function createBooking(
     return { success: false, error: insertError.message };
   }
 
+  await logAuditEvent("booking.created", {
+    actorUserId: user.id,
+    metadata: {
+      booking_id: inserted.id,
+      court_id,
+      booking_date,
+      start_hour,
+      end_hour,
+    },
+  });
+
   revalidatePath("/booking");
   revalidatePath("/my-bookings");
+  revalidatePath("/admin/bookings");
   return { success: true, bookingId: inserted.id };
 }

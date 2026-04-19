@@ -175,7 +175,7 @@ export function BookingView({
         duration_hours: effectiveDuration,
       });
       if (result.success) {
-        router.push(`/booking/confirmation/${result.bookingId}`);
+        router.push(`/payment/${result.bookingId}`);
       } else {
         toast.error(result.error);
         if (result.slotTaken) refreshAvailability();
