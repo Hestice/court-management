@@ -205,6 +205,11 @@ export function BookingsView({
       cell: (r) => formatHourRange(r.start_hour, r.end_hour),
     },
     {
+      header: "Guests",
+      cell: (r) => r.guest_count,
+      className: "tabular-nums",
+    },
+    {
       header: "Status",
       cell: (r) => (
         <div className="flex flex-col gap-1">

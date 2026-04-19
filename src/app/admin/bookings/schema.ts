@@ -1,12 +1,30 @@
 import * as z from "zod";
 
 import {
+  GUEST_COUNT_MAX,
+  GUEST_COUNT_MIN,
   MESSAGE_MAX,
   NAME_MAX,
   PHONE_MAX,
   REASON_MAX,
   safeText,
 } from "@/lib/zod-helpers";
+
+const guestCountField = z
+  .number({ message: "Enter a guest count." })
+  .int({ message: "Guest count must be a whole number." })
+  .min(GUEST_COUNT_MIN, {
+    message: `Guest count must be at least ${GUEST_COUNT_MIN}.`,
+  })
+  .max(GUEST_COUNT_MAX, {
+    message: `Guest count can't exceed ${GUEST_COUNT_MAX}.`,
+  });
+
+export const editGuestCountSchema = z.object({
+  guest_count: guestCountField,
+});
+
+export type EditGuestCountValues = z.infer<typeof editGuestCountSchema>;
 
 // Shared with the customer booking form but re-declared here so the admin
 // flows can evolve independently without leaking regressions across pages.
@@ -65,6 +83,7 @@ export const walkinSchema = z.object({
     .int()
     .min(1, { message: "Duration must be at least 1 hour." })
     .max(24),
+  guest_count: guestCountField,
 });
 
 export type WalkinValues = z.infer<typeof walkinSchema>;
@@ -87,6 +106,7 @@ export type BookingRow = {
   end_hour: number;
   status: BookingStatus;
   total_amount: number;
+  guest_count: number;
   expires_at: string | null;
   created_at: string;
   payment_receipt_url: string | null;

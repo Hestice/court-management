@@ -41,11 +41,14 @@ import {
   approveBooking,
   cancelBooking,
   completeBooking,
+  editBookingGuestCount,
+  manualRedeemBookingGuest,
   rejectBooking,
   rescheduleBooking,
   saveBookingNotes,
 } from "../actions";
 import type { BookingRow, BookingStatus } from "../schema";
+import { GUEST_COUNT_MAX, GUEST_COUNT_MIN } from "@/lib/zod-helpers";
 
 export type ActivityEntry = {
   id: string;
@@ -53,6 +56,15 @@ export type ActivityEntry = {
   createdAt: string;
   actorName: string | null;
   metadata: Record<string, unknown> | null;
+};
+
+export type BookingGuestRow = {
+  id: string;
+  guest_number: number;
+  qr_code: string;
+  redeemed_at: string | null;
+  redeemed_by_name: string | null;
+  redeemed_by_email: string | null;
 };
 
 type CourtOption = {
@@ -94,21 +106,25 @@ function formatTimestamp(iso: string): string {
 
 export function BookingDetailView({
   booking,
+  guests,
   receiptSignedUrl,
   activity,
   courts,
   operatingStart,
   operatingEnd,
   maxDuration,
+  entrancePricePerGuest,
   today,
 }: {
   booking: BookingRow;
+  guests: BookingGuestRow[];
   receiptSignedUrl: string | null;
   activity: ActivityEntry[];
   courts: CourtOption[];
   operatingStart: number;
   operatingEnd: number;
   maxDuration: number;
+  entrancePricePerGuest: number;
   today: string;
 }) {
   const router = useRouter();
@@ -119,6 +135,10 @@ export function BookingDetailView({
   const [completeOpen, setCompleteOpen] = useState(false);
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [receiptOpen, setReceiptOpen] = useState(false);
+  const [guestEditOpen, setGuestEditOpen] = useState(false);
+
+  const canEditGuests =
+    booking.status === "pending" || booking.status === "confirmed";
 
   const canApprove =
     booking.status === "pending" && !!booking.payment_receipt_url;
@@ -145,7 +165,12 @@ export function BookingDetailView({
         </Button>
       </div>
 
-      <SummaryCard booking={booking} />
+      <SummaryCard
+        booking={booking}
+        entrancePricePerGuest={entrancePricePerGuest}
+        canEditGuests={canEditGuests}
+        onEditGuests={() => setGuestEditOpen(true)}
+      />
 
       <ReceiptSection
         hasReceipt={!!booking.payment_receipt_url}
@@ -196,6 +221,12 @@ export function BookingDetailView({
         ) : null}
       </section>
 
+      <GuestListSection
+        guests={guests}
+        total={booking.guest_count}
+        onDone={onActionDone}
+      />
+
       <AdminNotes bookingId={booking.id} initial={booking.admin_notes ?? ""} />
 
       <ActivityTimeline entries={activity} />
@@ -245,13 +276,32 @@ export function BookingDetailView({
           }}
         />
       ) : null}
+      <GuestCountDialog
+        open={guestEditOpen}
+        onOpenChange={setGuestEditOpen}
+        bookingId={booking.id}
+        currentCount={booking.guest_count}
+        onDone={onActionDone}
+      />
     </>
   );
 }
 
-function SummaryCard({ booking }: { booking: BookingRow }) {
+function SummaryCard({
+  booking,
+  entrancePricePerGuest,
+  canEditGuests,
+  onEditGuests,
+}: {
+  booking: BookingRow;
+  entrancePricePerGuest: number;
+  canEditGuests: boolean;
+  onEditGuests: () => void;
+}) {
   const duration = booking.end_hour - booking.start_hour;
   const isWalkin = booking.user_id === null;
+  const courtRental = booking.court_hourly_rate * duration;
+  const entrance = entrancePricePerGuest * booking.guest_count;
 
   return (
     <section className="flex flex-col gap-4 rounded-lg border border-border p-4">
@@ -322,9 +372,31 @@ function SummaryCard({ booking }: { booking: BookingRow }) {
         </div>
 
         <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <p className="text-xs font-medium text-muted-foreground">Guests</p>
+            {canEditGuests ? (
+              <button
+                type="button"
+                onClick={onEditGuests}
+                className="rounded-md border border-border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+              >
+                Edit
+              </button>
+            ) : null}
+          </div>
+          <p className="font-medium">
+            {booking.guest_count}{" "}
+            {booking.guest_count === 1 ? "guest" : "guests"}
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-1">
           <p className="text-xs font-medium text-muted-foreground">Total</p>
           <p className="text-lg font-semibold">
             {formatPHP(booking.total_amount)}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Court {formatPHP(courtRental)} + entrance {formatPHP(entrance)}
           </p>
         </div>
 
@@ -808,9 +880,241 @@ function describeActivity(entry: ActivityEntry): string {
       return "Booking marked completed";
     case "booking.note_updated":
       return "Admin notes updated";
+    case "booking.guest_count_changed": {
+      const from = entry.metadata?.from;
+      const to = entry.metadata?.to;
+      return typeof from === "number" && typeof to === "number"
+        ? `Guest count: ${from} → ${to}`
+        : "Guest count changed";
+    }
+    case "booking.guest_redeemed":
+      return entry.metadata?.manual
+        ? "Guest manually redeemed"
+        : "Guest redeemed";
     default:
       return entry.action;
   }
+}
+
+function GuestListSection({
+  guests,
+  total,
+  onDone,
+}: {
+  guests: BookingGuestRow[];
+  total: number;
+  onDone: () => void;
+}) {
+  return (
+    <section className="flex flex-col gap-3 rounded-lg border border-border p-4">
+      <h2 className="text-sm font-medium text-muted-foreground">
+        Guests ({total})
+      </h2>
+      {guests.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          QR codes are generated when the booking is confirmed.
+        </p>
+      ) : (
+        <ul className="flex flex-col divide-y divide-border">
+          {guests.map((g) => (
+            <GuestRow key={g.id} guest={g} total={total} onDone={onDone} />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function GuestRow({
+  guest,
+  total,
+  onDone,
+}: {
+  guest: BookingGuestRow;
+  total: number;
+  onDone: () => void;
+}) {
+  const [pending, startTransition] = useTransition();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const redeemed = !!guest.redeemed_at;
+  // Truncate the QR string — first 16 chars is enough to eyeball a match
+  // against the scanner log on a support call.
+  const truncatedQr =
+    guest.qr_code.length > 16
+      ? `${guest.qr_code.slice(0, 16)}…`
+      : guest.qr_code;
+
+  function onConfirm() {
+    startTransition(async () => {
+      const res = await manualRedeemBookingGuest(guest.id);
+      if (res.success) {
+        toast.success(`Guest ${guest.guest_number} marked redeemed`);
+        setConfirmOpen(false);
+        onDone();
+      } else {
+        toast.error(res.error);
+      }
+    });
+  }
+
+  return (
+    <>
+      <li className="flex flex-wrap items-center justify-between gap-3 py-3">
+        <div className="flex flex-col">
+          <p className="text-sm font-medium">
+            Guest {guest.guest_number} of {total}
+          </p>
+          <p className="font-mono text-xs text-muted-foreground">
+            {truncatedQr}
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          {redeemed ? (
+            <div className="flex flex-col items-end text-xs">
+              <span className="font-medium text-emerald-600">✓ Redeemed</span>
+              <span className="text-muted-foreground">
+                {formatTimestamp(guest.redeemed_at!)}
+                {guest.redeemed_by_name || guest.redeemed_by_email
+                  ? ` · ${guest.redeemed_by_name ?? guest.redeemed_by_email}`
+                  : ""}
+              </span>
+            </div>
+          ) : (
+            <>
+              <span className="text-xs text-muted-foreground">Not redeemed</span>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setConfirmOpen(true)}
+                disabled={pending}
+              >
+                Mark redeemed
+              </Button>
+            </>
+          )}
+        </div>
+      </li>
+      <Dialog
+        open={confirmOpen}
+        onOpenChange={(o) => !o && !pending && setConfirmOpen(o)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              Mark guest {guest.guest_number} redeemed?
+            </DialogTitle>
+            <DialogDescription>
+              Use this for gate entries that bypassed the scanner. The action
+              is logged in the activity trail.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setConfirmOpen(false)}
+              disabled={pending}
+            >
+              Cancel
+            </Button>
+            <Button onClick={onConfirm} disabled={pending}>
+              {pending ? "Saving…" : "Mark redeemed"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function GuestCountDialog({
+  open,
+  onOpenChange,
+  bookingId,
+  currentCount,
+  onDone,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  bookingId: string;
+  currentCount: number;
+  onDone: () => void;
+}) {
+  const [count, setCount] = useState(currentCount);
+  const [pending, startTransition] = useTransition();
+
+  const [wasOpen, setWasOpen] = useState(open);
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    if (open) setCount(currentCount);
+  }
+
+  function onSubmit() {
+    startTransition(async () => {
+      const res = await editBookingGuestCount(bookingId, {
+        guest_count: count,
+      });
+      if (res.success) {
+        toast.success("Guest count updated");
+        onOpenChange(false);
+        onDone();
+      } else {
+        toast.error(res.error);
+      }
+    });
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && !pending && onOpenChange(o)}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Edit guest count</DialogTitle>
+          <DialogDescription>
+            Adjust the number of people on this booking. Already-redeemed
+            guests can&apos;t be dropped. Total recalculates automatically.
+          </DialogDescription>
+        </DialogHeader>
+        <label className="flex flex-col gap-1">
+          <span className="text-sm font-medium">Number of guests</span>
+          <Input
+            type="number"
+            inputMode="numeric"
+            min={GUEST_COUNT_MIN}
+            max={GUEST_COUNT_MAX}
+            step={1}
+            value={Number.isFinite(count) ? count : ""}
+            onChange={(e) => {
+              const n = e.target.valueAsNumber;
+              setCount(Number.isFinite(n) ? Math.floor(n) : 0);
+            }}
+            disabled={pending}
+          />
+          <span className="text-xs text-muted-foreground">
+            Between {GUEST_COUNT_MIN} and {GUEST_COUNT_MAX}.
+          </span>
+        </label>
+        <DialogFooter>
+          <Button
+            variant="ghost"
+            onClick={() => onOpenChange(false)}
+            disabled={pending}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={onSubmit}
+            disabled={
+              pending ||
+              count < GUEST_COUNT_MIN ||
+              count > GUEST_COUNT_MAX ||
+              count === currentCount
+            }
+          >
+            {pending ? "Saving…" : "Save"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 // ============================================================================
